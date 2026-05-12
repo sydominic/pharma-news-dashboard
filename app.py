@@ -33,7 +33,7 @@ DATA_DIR = BASE_DIR / "data"
 CONFIG_PATH = DATA_DIR / "rss_sources.json"
 RAW_PATH = DATA_DIR / "news_raw.csv"
 CLEAN_PATH = DATA_DIR / "news_clean.csv"
-APP_VERSION = "v1.17"
+APP_VERSION = "v1.18"
 
 st.set_page_config(page_title="제약뉴스 RSS 대시보드", page_icon="📰", layout="wide", initial_sidebar_state="collapsed")
 inject_css()
@@ -806,7 +806,7 @@ with tab_dashboard:
         render_category_pie(filtered_df, title="카테고리 분포")
         render_pretty_table(category_ratio_table(filtered_df), ["카테고리", "기사 수", "비중"], max_rows=10)
 
-    section_title("유사 이슈 묶음", "같은 이슈로 보이는 반복 보도")
+    section_title("유사 이슈 묶음", "")
     render_issue_groups(issue_groups_cache)
 
 with tab_news:
@@ -855,7 +855,6 @@ with tab_radar:
 
 with tab_policy:
     st.subheader("🏛️ 규제기관 정책")
-    st.caption("정책·가이드라인성 뉴스만 카드로 표시합니다. 하단에는 국내외 규제기관 주요 정책/가이드라인 게시판 바로가기를 제공합니다.")
     policy_df = extract_policy_articles(filtered_df)
     p1, p2, p3, p4 = st.columns(4)
     with p1:
