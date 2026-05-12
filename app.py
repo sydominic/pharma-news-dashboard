@@ -32,7 +32,7 @@ DATA_DIR = BASE_DIR / "data"
 CONFIG_PATH = DATA_DIR / "rss_sources.json"
 RAW_PATH = DATA_DIR / "news_raw.csv"
 CLEAN_PATH = DATA_DIR / "news_clean.csv"
-APP_VERSION = "v1.25"
+APP_VERSION = "v1.26"
 
 st.set_page_config(page_title="제약뉴스 RSS 대시보드", page_icon="📰", layout="wide", initial_sidebar_state="collapsed")
 inject_css()
@@ -760,9 +760,15 @@ TAB_LABELS = [
     "🛰️ 4. 규제 레이더",
     "🏛️ 5. 규제기관 정책",
 ]
-tab_dashboard, tab_news, tab_keyword, tab_radar, tab_policy = st.tabs(TAB_LABELS)
+active_tab = st.radio(
+    "화면 선택",
+    TAB_LABELS,
+    horizontal=True,
+    key="active_tab",
+    label_visibility="collapsed",
+)
 
-with tab_dashboard:
+if active_tab == TAB_LABELS[0]:
     st.subheader("📊 Dashboard")
     now = pd.Timestamp.now()
     df_dt = filtered_df.copy()
@@ -803,7 +809,7 @@ with tab_dashboard:
     section_title("유사 이슈 묶음", "")
     render_issue_groups(issue_groups_cache)
 
-with tab_news:
+elif active_tab == TAB_LABELS[1]:
     st.subheader("📰 뉴스목록")
     if filtered_df.empty:
         st.info("표시할 뉴스가 없습니다.")
@@ -844,7 +850,7 @@ with tab_news:
             for _, row in day_df.iterrows():
                 timeline_item(row)
 
-with tab_keyword:
+elif active_tab == TAB_LABELS[2]:
     st.subheader("🔎 키워드 인텔리전스")
     c1, c2 = st.columns([1.45, 1], gap="large")
     with c1:
@@ -870,14 +876,14 @@ with tab_keyword:
         for _, row in representative_articles(filtered_df, limit=5).iterrows():
             article_card(row, show_summary=False)
 
-with tab_radar:
+elif active_tab == TAB_LABELS[3]:
     st.subheader("🛰️ 규제 레이더")
     default_lanes = ["식약처/규제", "정책/가이드라인", "GMP/품질", "허가/임상", "해외규제", "회수/처분"]
     radar_filter = st.multiselect("레이더 표시 카테고리", default_lanes + ["약가/보험", "산업/경영"], default=default_lanes)
     radar_df = filtered_df[filtered_df["category"].isin(radar_filter)] if radar_filter else filtered_df
     render_kanban(radar_df, lanes=radar_filter)
 
-with tab_policy:
+elif active_tab == TAB_LABELS[4]:
     st.subheader("🏛️ 규제기관 정책")
     policy_df = extract_policy_articles(filtered_df)
     p1, p2, p3, p4 = st.columns(4)
