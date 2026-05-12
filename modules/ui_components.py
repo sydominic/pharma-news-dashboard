@@ -23,6 +23,10 @@ def inject_css() -> None:
         .hanall-header p { margin:7px 0 0; color:rgba(255,255,255,0.76); font-size:14px; }
         .compact-filter-title { font-weight:900; color:#081f3f; font-size:15px; margin:-2px 0 8px 0; }
         .small-caption { color:#64748b; font-size:12px; margin-top:-4px; }
+
+        .tab-button-spacer { height:8px; margin-top:2px; }
+        div[data-testid="stButton"] > button { font-size:17px !important; font-weight:900 !important; border-radius:14px !important; min-height:46px; }
+        div[data-testid="stButton"] > button p { font-size:17px !important; font-weight:900 !important; }
         div[data-testid="stHorizontalBlock"] div[data-testid="stVerticalBlock"] > div[data-testid="stElementContainer"] { margin-bottom:0.15rem; }
         .stTabs [data-baseweb="tab-list"] { gap:10px; border-bottom:1px solid #dbe7f3; }
         .stTabs [data-baseweb="tab"] { height:48px; padding:0 18px; border-radius:14px 14px 0 0; font-size:17px; font-weight:900; color:#123c68; background:#f5f9ff; border:1px solid #dbe7f3; border-bottom:0; }

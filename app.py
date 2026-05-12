@@ -32,7 +32,7 @@ DATA_DIR = BASE_DIR / "data"
 CONFIG_PATH = DATA_DIR / "rss_sources.json"
 RAW_PATH = DATA_DIR / "news_raw.csv"
 CLEAN_PATH = DATA_DIR / "news_clean.csv"
-APP_VERSION = "v1.26"
+APP_VERSION = "v1.27"
 
 st.set_page_config(page_title="제약뉴스 RSS 대시보드", page_icon="📰", layout="wide", initial_sidebar_state="collapsed")
 inject_css()
@@ -738,37 +738,49 @@ filtered_df = prepare_display_df(filtered_df)
 
 render_link_diagnostics(all_df, filtered_df)
 
-excel_bytes = to_excel_bytes(filtered_df)
 issue_groups_cache = group_similar_issues(filtered_df, max_groups=8)
-
-st.download_button(
-    "📥 현재 조회 결과 엑셀 다운로드",
-    data=excel_bytes,
-    file_name=f"pharma_news_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    use_container_width=True,
-)
 
 if filtered_df.empty:
     st.warning("현재 필터 조건에 해당하는 기사가 없습니다. 기간 또는 검색어를 조정하거나 RSS 수집을 실행해 주세요.")
 
-# 화면선택: 왼쪽 라디오 제거, 상단 탭형으로 변경
-TAB_LABELS = [
-    "📊 1. Dashboard",
-    "📰 2. 뉴스목록",
-    "🔎 3. 키워드 인텔리전스",
-    "🛰️ 4. 규제 레이더",
-    "🏛️ 5. 규제기관 정책",
-]
-active_tab = st.radio(
-    "화면 선택",
-    TAB_LABELS,
-    horizontal=True,
-    key="active_tab",
-    label_visibility="collapsed",
-)
+# 화면선택: rerun 후에도 현재 화면을 유지하는 버튼형 탭
+TAB_LABELS = {
+    "dashboard": "📊 1. Dashboard",
+    "news": "📰 2. 뉴스목록",
+    "keyword": "🔎 3. 키워드 인텔리전스",
+    "radar": "🛰️ 4. 규제 레이더",
+    "policy": "🏛️ 5. 규제기관 정책",
+}
+LEGACY_TAB_MAP = {
+    "📊 1. Dashboard": "dashboard",
+    "📰 2. 뉴스목록": "news",
+    "🔎 3. 키워드 인텔리전스": "keyword",
+    "🛰️ 4. 규제 레이더": "radar",
+    "🏛️ 5. 규제기관 정책": "policy",
+}
+current_tab = st.session_state.get("active_tab", "dashboard")
+if current_tab in LEGACY_TAB_MAP:
+    current_tab = LEGACY_TAB_MAP[current_tab]
+if current_tab not in TAB_LABELS:
+    current_tab = "dashboard"
+st.session_state["active_tab"] = current_tab
 
-if active_tab == TAB_LABELS[0]:
+st.markdown("<div class='tab-button-spacer'></div>", unsafe_allow_html=True)
+tab_cols = st.columns([1, 1, 1.18, 1, 1.15])
+for col, tab_key in zip(tab_cols, TAB_LABELS.keys()):
+    with col:
+        clicked = st.button(
+            TAB_LABELS[tab_key],
+            key=f"tab_button_{tab_key}",
+            use_container_width=True,
+            type="primary" if st.session_state["active_tab"] == tab_key else "secondary",
+        )
+        if clicked:
+            st.session_state["active_tab"] = tab_key
+            st.rerun()
+active_tab = st.session_state["active_tab"]
+
+if active_tab == "dashboard":
     st.subheader("📊 Dashboard")
     now = pd.Timestamp.now()
     df_dt = filtered_df.copy()
@@ -809,7 +821,7 @@ if active_tab == TAB_LABELS[0]:
     section_title("유사 이슈 묶음", "")
     render_issue_groups(issue_groups_cache)
 
-elif active_tab == TAB_LABELS[1]:
+elif active_tab == "news":
     st.subheader("📰 뉴스목록")
     if filtered_df.empty:
         st.info("표시할 뉴스가 없습니다.")
@@ -850,7 +862,7 @@ elif active_tab == TAB_LABELS[1]:
             for _, row in day_df.iterrows():
                 timeline_item(row)
 
-elif active_tab == TAB_LABELS[2]:
+elif active_tab == "keyword":
     st.subheader("🔎 키워드 인텔리전스")
     c1, c2 = st.columns([1.45, 1], gap="large")
     with c1:
@@ -876,14 +888,14 @@ elif active_tab == TAB_LABELS[2]:
         for _, row in representative_articles(filtered_df, limit=5).iterrows():
             article_card(row, show_summary=False)
 
-elif active_tab == TAB_LABELS[3]:
+elif active_tab == "radar":
     st.subheader("🛰️ 규제 레이더")
     default_lanes = ["식약처/규제", "정책/가이드라인", "GMP/품질", "허가/임상", "해외규제", "회수/처분"]
     radar_filter = st.multiselect("레이더 표시 카테고리", default_lanes + ["약가/보험", "산업/경영"], default=default_lanes)
     radar_df = filtered_df[filtered_df["category"].isin(radar_filter)] if radar_filter else filtered_df
     render_kanban(radar_df, lanes=radar_filter)
 
-elif active_tab == TAB_LABELS[4]:
+elif active_tab == "policy":
     st.subheader("🏛️ 규제기관 정책")
     policy_df = extract_policy_articles(filtered_df)
     p1, p2, p3, p4 = st.columns(4)
