@@ -25,6 +25,11 @@ RETENTION_LONG_DAYS = 1095
 LONG_RETENTION_CATEGORIES = {"정책/가이드라인", "회수/처분", "GMP/품질"}
 LONG_RETENTION_IMPORTANCE = {"높음"}
 
+BOOLEAN_COLUMNS = {"qa_flag"}
+TEXT_COLUMNS = [c for c in STANDARD_COLUMNS if c not in BOOLEAN_COLUMNS]
+DEFAULT_COLUMN_VALUES = {col: "" for col in TEXT_COLUMNS}
+DEFAULT_COLUMN_VALUES.update({"qa_flag": False})
+
 
 def ensure_data_dir(path: str | Path) -> None:
     Path(path).mkdir(parents=True, exist_ok=True)
@@ -208,12 +213,24 @@ def needs_reclassify(row: pd.Series) -> bool:
 
 def repair_and_reclassify(df: pd.DataFrame, force: bool = False) -> pd.DataFrame:
     if df is None or df.empty:
-        return pd.DataFrame(columns=STANDARD_COLUMNS)
+        empty = pd.DataFrame(columns=STANDARD_COLUMNS)
+        empty["qa_flag"] = pd.Series(dtype="bool")
+        return empty
 
-    work = df.copy()
+    # Streamlit Cloud/pandas 최신 조합에서는 string dtype 컬럼에 bool 값을 대입하면
+    # "Invalid value for dtype 'str'"가 발생할 수 있다.
+    # 따라서 정규화 시작 시 전체를 object 기반으로 완화하고, qa_flag만 bool로 별도 관리한다.
+    work = df.copy().astype("object")
     for col in STANDARD_COLUMNS:
         if col not in work.columns:
-            work[col] = ""
+            work[col] = DEFAULT_COLUMN_VALUES.get(col, "")
+
+    # Boolean 성격 컬럼은 문자열 기본값을 쓰지 않는다.
+    work["qa_flag"] = work["qa_flag"].apply(normalize_bool).astype("bool")
+
+    # 분류 결과를 대입할 문자열 컬럼은 object dtype으로 명시한다.
+    for col in ["category", "keywords", "importance"]:
+        work[col] = work[col].astype("object")
 
     # link는 URL 자체를 보존해야 하므로 clean_text()가 아니라 clean_link()로 처리한다.
     # 기존/외부 CSV에서 url, article_url 등 다른 컬럼명으로 들어온 경우도 link로 복구한다.
@@ -240,7 +257,7 @@ def repair_and_reclassify(df: pd.DataFrame, force: bool = False) -> pd.DataFrame
     # 최종 보정: 카테고리 공란/None은 산업/경영으로 보냄
     work["category"] = work["category"].apply(lambda x: x if clean_text(x) in VALID_CATEGORIES else "산업/경영")
     work["importance"] = work["importance"].apply(lambda x: x if clean_text(x) in {"높음", "중간", "일반"} else "일반")
-    work["qa_flag"] = work["qa_flag"].apply(normalize_bool)
+    work["qa_flag"] = work["qa_flag"].apply(normalize_bool).astype("bool")
 
     work["published_at"] = pd.to_datetime(work["published_at"], errors="coerce")
     work["published_at"] = work["published_at"].fillna(pd.Timestamp.now())

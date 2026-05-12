@@ -51,7 +51,7 @@ DATA_DIR = BASE_DIR / "data"
 CONFIG_PATH = DATA_DIR / "rss_sources.json"
 RAW_PATH = DATA_DIR / "news_raw.csv"
 CLEAN_PATH = DATA_DIR / "news_clean.csv"
-APP_VERSION = "v1.13.1"
+APP_VERSION = "v1.13.2"
 
 st.set_page_config(page_title="제약뉴스 RSS 대시보드", page_icon="📰", layout="wide", initial_sidebar_state="collapsed")
 inject_css()
@@ -137,22 +137,49 @@ def collect_and_save(start_date=None, end_date=None, max_items_per_query: int | 
 
 def load_or_collect_initial() -> pd.DataFrame:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    df = load_news(CLEAN_PATH)
-    if not df.empty:
-        # v1.4 분류체계(정책/가이드라인 포함)로 기존 누적자료를 다시 보정
-        df = repair_and_reclassify(df, force=True)
-        save_news(df, CLEAN_PATH)
-        return df
+
+    # 1) 기존 누적 파일 로드/보정
     try:
-        with st.spinner("최초 실행: 최근 7일 Google News RSS에서 기사 수집 중입니다..."):
-            today = date.today()
-            df, errors, _ = collect_and_save(start_date=today - timedelta(days=6), end_date=today)
-        if errors:
-            st.warning("일부 RSS 검색식에서 수집 오류가 있었습니다. 수집된 데이터는 정상 표시합니다.")
+        df = load_news(CLEAN_PATH)
         if not df.empty:
+            df = repair_and_reclassify(df, force=True)
+            save_news(df, CLEAN_PATH)
             return df
     except Exception as exc:
-        st.warning(f"RSS 최초 수집에 실패했습니다. 화면 확인용 샘플 데이터를 표시합니다. 오류: {exc}")
+        st.warning(f"기존 누적 데이터 로드/보정 단계에서 오류가 발생했습니다. 최초 수집을 시도합니다. 오류: {exc}")
+
+    # 2) 최초 RSS 수집
+    try:
+        today = date.today()
+        with st.spinner("최초 실행: 최근 7일 Google News RSS에서 기사 수집 중입니다..."):
+            raw = collect_google_news(CONFIG_PATH, start_date=today - timedelta(days=6), end_date=today)
+        errors = raw.attrs.get("errors", []) if hasattr(raw, "attrs") else []
+        if not raw.empty:
+            raw.to_csv(RAW_PATH, index=False, encoding="utf-8-sig")
+    except Exception as exc:
+        st.warning(f"RSS 수집 단계에서 오류가 발생했습니다. 화면 확인용 샘플 데이터를 표시합니다. 오류: {exc}")
+        return sample_news()
+
+    # 3) 정규화/분류
+    try:
+        clean = normalize_and_classify(raw)
+    except Exception as exc:
+        st.warning(f"RSS 데이터 정규화/분류 단계에서 오류가 발생했습니다. 화면 확인용 샘플 데이터를 표시합니다. 오류: {exc}")
+        return sample_news()
+
+    # 4) 병합/보관정책/저장
+    try:
+        existing = load_news(CLEAN_PATH)
+        merged = merge_existing(existing, clean)
+        save_news(merged, CLEAN_PATH)
+        if errors:
+            st.warning("일부 RSS 검색식에서 수집 오류가 있었습니다. 수집된 데이터는 정상 표시합니다.")
+        if not merged.empty:
+            return merged
+    except Exception as exc:
+        st.warning(f"병합/보관정책/저장 단계에서 오류가 발생했습니다. 화면 확인용 샘플 데이터를 표시합니다. 오류: {exc}")
+        return sample_news()
+
     return sample_news()
 
 
@@ -160,7 +187,7 @@ def prepare_display_df(df: pd.DataFrame) -> pd.DataFrame:
     work = repair_and_reclassify(df, force=False).copy()
     for col in STANDARD_COLUMNS:
         if col not in work.columns:
-            work[col] = ""
+            work[col] = False if col == "qa_flag" else ""
     work["published_at_dt"] = pd.to_datetime(work["published_at"], errors="coerce")
     work = work.sort_values("published_at_dt", ascending=False)
     work["published_at"] = work["published_at_dt"].dt.strftime("%Y-%m-%d %H:%M:%S").fillna("")
