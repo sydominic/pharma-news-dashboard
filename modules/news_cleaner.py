@@ -212,64 +212,96 @@ def needs_reclassify(row: pd.Series) -> bool:
 
 
 def repair_and_reclassify(df: pd.DataFrame, force: bool = False) -> pd.DataFrame:
+    """RSS/CSV 데이터를 표준 컬럼으로 정규화하고 재분류한다.
+
+    v1.13.3 핵심 수정:
+    pandas 2.3+/Streamlit Cloud 환경에서 string dtype 컬럼에 bool/datetime 값을
+    부분 대입하면 `Invalid value for dtype 'str'` 오류가 발생할 수 있다.
+    따라서 기존처럼 DataFrame 컬럼을 만든 뒤 loc로 값을 대입하지 않고,
+    행 단위 Python dict를 새로 구성한 뒤 마지막에 DataFrame을 생성한다.
+    """
     if df is None or df.empty:
         empty = pd.DataFrame(columns=STANDARD_COLUMNS)
         empty["qa_flag"] = pd.Series(dtype="bool")
         return empty
 
-    # Streamlit Cloud/pandas 최신 조합에서는 string dtype 컬럼에 bool 값을 대입하면
-    # "Invalid value for dtype 'str'"가 발생할 수 있다.
-    # 따라서 정규화 시작 시 전체를 object 기반으로 완화하고, qa_flag만 bool로 별도 관리한다.
-    work = df.copy().astype("object")
-    for col in STANDARD_COLUMNS:
-        if col not in work.columns:
-            work[col] = DEFAULT_COLUMN_VALUES.get(col, "")
+    records = []
+    input_df = df.copy()
 
-    # Boolean 성격 컬럼은 문자열 기본값을 쓰지 않는다.
-    work["qa_flag"] = work["qa_flag"].apply(normalize_bool).astype("bool")
+    for _, row in input_df.iterrows():
+        title = clean_title(row.get("title", ""))
+        summary = clean_summary(row.get("summary", ""))
+        source = clean_text(row.get("source", ""))
+        rss_query_name = clean_text(row.get("rss_query_name", ""))
+        rss_query = clean_text(row.get("rss_query", ""))
+        collected_at = clean_text(row.get("collected_at", ""))
+        link = recover_link_from_candidates(row)
 
-    # 분류 결과를 대입할 문자열 컬럼은 object dtype으로 명시한다.
-    for col in ["category", "keywords", "importance"]:
-        work[col] = work[col].astype("object")
+        category = clean_text(row.get("category", ""))
+        keywords = clean_text(row.get("keywords", ""))
+        importance = clean_text(row.get("importance", ""))
+        qa_flag = normalize_bool(row.get("qa_flag", False))
 
-    # link는 URL 자체를 보존해야 하므로 clean_text()가 아니라 clean_link()로 처리한다.
-    # 기존/외부 CSV에서 url, article_url 등 다른 컬럼명으로 들어온 경우도 link로 복구한다.
-    work["link"] = work.apply(recover_link_from_candidates, axis=1)
+        needs_cls = (
+            force
+            or category not in VALID_CATEGORIES
+            or category == "기타"
+            or not keywords
+            or importance not in {"높음", "중간", "일반"}
+        )
+        if needs_cls:
+            category, keywords, importance, qa_flag = classify_article(title, summary)
+            qa_flag = bool(qa_flag)
 
-    for col in ["title", "source", "rss_query_name", "rss_query", "collected_at"]:
-        work[col] = work[col].apply(clean_text)
-    work["title"] = work["title"].apply(clean_title)
-    work["summary"] = work["summary"].apply(clean_summary)
+        if clean_text(category) not in VALID_CATEGORIES:
+            category = "산업/경영"
+        if clean_text(importance) not in {"높음", "중간", "일반"}:
+            importance = "일반"
+        keywords = clean_text(keywords)
 
-    # category/keywords/importance의 nan/None 문자열 정리
-    for col in ["category", "keywords", "importance"]:
-        work[col] = work[col].apply(clean_text)
+        published_dt = pd.to_datetime(row.get("published_at", ""), errors="coerce")
+        if pd.isna(published_dt):
+            published_dt = pd.Timestamp.now()
+        published_at = published_dt.strftime("%Y-%m-%d %H:%M:%S")
+        date_value = published_dt.strftime("%Y-%m-%d")
+        time_value = published_dt.strftime("%H:%M")
 
-    # v1.1에서 이미 누적된 None/nan/기타를 제목+요약 기준으로 재분류
-    mask = work.apply(needs_reclassify, axis=1) if not force else pd.Series([True] * len(work), index=work.index)
-    if mask.any():
-        classified = work.loc[mask].apply(lambda r: classify_article(r.get("title", ""), r.get("summary", "")), axis=1)
-        work.loc[mask, "category"] = [x[0] for x in classified]
-        work.loc[mask, "keywords"] = [x[1] for x in classified]
-        work.loc[mask, "importance"] = [x[2] for x in classified]
-        work.loc[mask, "qa_flag"] = [bool(x[3]) for x in classified]
+        uid = clean_text(row.get("uid", ""))
+        if not uid:
+            uid = f"{source}|{published_at}|{title}".lower()
 
-    # 최종 보정: 카테고리 공란/None은 산업/경영으로 보냄
-    work["category"] = work["category"].apply(lambda x: x if clean_text(x) in VALID_CATEGORIES else "산업/경영")
-    work["importance"] = work["importance"].apply(lambda x: x if clean_text(x) in {"높음", "중간", "일반"} else "일반")
-    work["qa_flag"] = work["qa_flag"].apply(normalize_bool).astype("bool")
+        records.append({
+            "uid": uid,
+            "published_at": published_at,
+            "date": date_value,
+            "time": time_value,
+            "source": source,
+            "category": category,
+            "keywords": keywords,
+            "importance": importance,
+            "qa_flag": bool(qa_flag),
+            "title": title,
+            "summary": summary,
+            "link": link,
+            "rss_query_name": rss_query_name,
+            "rss_query": rss_query,
+            "collected_at": collected_at,
+        })
 
-    work["published_at"] = pd.to_datetime(work["published_at"], errors="coerce")
-    work["published_at"] = work["published_at"].fillna(pd.Timestamp.now())
-    work["date"] = work["published_at"].dt.strftime("%Y-%m-%d")
-    work["time"] = work["published_at"].dt.strftime("%H:%M")
-    work["published_at"] = work["published_at"].dt.strftime("%Y-%m-%d %H:%M:%S")
+    out = pd.DataFrame.from_records(records, columns=STANDARD_COLUMNS)
+    if out.empty:
+        empty = pd.DataFrame(columns=STANDARD_COLUMNS)
+        empty["qa_flag"] = pd.Series(dtype="bool")
+        return empty
 
-    if "uid" not in work.columns or work["uid"].fillna("").astype(str).str.strip().eq("").any():
-        work["uid"] = work.apply(lambda r: f"{r['source']}|{r['published_at']}|{r['title']}".lower(), axis=1)
+    # 최종 dtype은 신규 DataFrame 생성 후 한 번만 안정화한다.
+    for col in TEXT_COLUMNS:
+        if col in out.columns:
+            out[col] = out[col].fillna("").astype("object")
+    out["qa_flag"] = out["qa_flag"].apply(normalize_bool).astype("bool")
 
-    work = work[STANDARD_COLUMNS].drop_duplicates(subset=["uid"], keep="first")
-    return work.sort_values("published_at", ascending=False).reset_index(drop=True)
+    out = out.drop_duplicates(subset=["uid"], keep="first")
+    return out.sort_values("published_at", ascending=False).reset_index(drop=True)
 
 
 def normalize_and_classify(df: pd.DataFrame) -> pd.DataFrame:
