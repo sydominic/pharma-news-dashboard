@@ -1,0 +1,102 @@
+{
+  "settings": {
+    "hl": "ko",
+    "gl": "KR",
+    "ceid": "KR:ko",
+    "max_items_per_query": 80,
+    "timeout_sec": 12,
+    "resolve_google_redirect": false
+  },
+  "queries": [
+    {
+      "name": "데일리팜 - 제약뉴스",
+      "source_hint": "데일리팜",
+      "query": "site:dailypharm.com 제약 OR 식약처 OR GMP OR 허가 OR 임상 OR 회수 OR FDA",
+      "enabled": true
+    },
+    {
+      "name": "히트뉴스 - 제약뉴스",
+      "source_hint": "히트뉴스",
+      "query": "site:hitnews.co.kr 제약 OR 바이오 OR 식약처 OR GMP OR 허가 OR 임상 OR FDA",
+      "enabled": true
+    },
+    {
+      "name": "팜뉴스 - 제약뉴스",
+      "source_hint": "팜뉴스",
+      "query": "site:pharmnews.com 제약 OR 식약처 OR GMP OR 허가 OR 임상 OR 회수",
+      "enabled": true
+    },
+    {
+      "name": "메디파나 - 제약뉴스",
+      "source_hint": "메디파나뉴스",
+      "query": "site:medipana.com 제약 OR 바이오 OR 식약처 OR 허가 OR 임상 OR 급여 OR GMP",
+      "enabled": true
+    },
+    {
+      "name": "약업닷컴 - 제약뉴스",
+      "source_hint": "약업닷컴",
+      "query": "site:yakup.com 제약 OR 의약품 OR 식약처 OR GMP OR 허가 OR 임상 OR 약가",
+      "enabled": true
+    },
+    {
+      "name": "한국의약통신 - 제약뉴스",
+      "source_hint": "한국의약통신",
+      "query": "site:kmpnews.co.kr 제약 OR 의약품 OR 식약처 OR GMP OR 허가 OR 임상 OR 약사",
+      "enabled": true
+    },
+    {
+      "name": "헬스코리아뉴스 - 제약뉴스",
+      "source_hint": "헬스코리아뉴스",
+      "query": "site:hkn24.com 제약 OR 바이오 OR 식약처 OR GMP OR 허가 OR 임상 OR 회수 OR FDA",
+      "enabled": true
+    },
+    {
+      "name": "약사공론 - 제약뉴스",
+      "source_hint": "약사공론",
+      "query": "site:kpanews.co.kr 제약 OR 의약품 OR 식약처 OR 허가 OR 임상 OR 약가 OR 약국",
+      "enabled": true
+    },
+    {
+      "name": "의학신문 - 제약뉴스",
+      "source_hint": "의학신문",
+      "query": "site:bosa.co.kr 제약 OR 의약품 OR 식약처 OR 허가 OR 임상 OR GMP",
+      "enabled": true
+    },
+    {
+      "name": "메디칼타임즈 - 제약뉴스",
+      "source_hint": "메디칼타임즈",
+      "query": "site:medicaltimes.com 제약 OR 바이오 OR 식약처 OR 허가 OR 임상",
+      "enabled": true
+    },
+    {
+      "name": "바이오스펙테이터 - 바이오뉴스",
+      "source_hint": "바이오스펙테이터",
+      "query": "site:biospectator.com 바이오 OR 임상 OR FDA OR EMA OR 기술수출 OR 신약",
+      "enabled": true
+    },
+    {
+      "name": "식약처/규제 전체",
+      "source_hint": "Google News",
+      "query": "제약 식약처 의약품 GMP 허가 회수 행정처분",
+      "enabled": true
+    },
+    {
+      "name": "해외규제 전체",
+      "source_hint": "Google News",
+      "query": "제약 FDA EMA PMDA 의약품 허가 GMP",
+      "enabled": true
+    },
+    {
+      "name": "정책/가이드라인 - 식약처",
+      "source_hint": "Google News",
+      "query": "식약처 의약품 가이드라인 OR 안내서 OR 행정예고 OR 고시 OR 약전 OR 제도개선",
+      "enabled": true
+    },
+    {
+      "name": "정책/가이드라인 - 해외규제",
+      "source_hint": "Google News",
+      "query": "pharma FDA guidance OR EMA guideline OR PMDA guidance OR ICH guideline",
+      "enabled": true
+    }
+  ]
+}

@@ -24,7 +24,6 @@ from modules.news_cleaner import (
     to_excel_bytes,
 )
 from modules.policy_links import extract_policy_articles, mfds_board_links, mfds_board_home_links
-from modules.pdf_report import build_pdf_report
 from modules.rss_collector import collect_google_news, load_rss_config
 from modules.ui_components import article_card, esc, header, inject_css, kpi_card, keyword_pills, section_title, timeline_item, title_with_link
 
@@ -33,7 +32,7 @@ DATA_DIR = BASE_DIR / "data"
 CONFIG_PATH = DATA_DIR / "rss_sources.json"
 RAW_PATH = DATA_DIR / "news_raw.csv"
 CLEAN_PATH = DATA_DIR / "news_clean.csv"
-APP_VERSION = "v1.17"
+APP_VERSION = "v1.16"
 
 st.set_page_config(page_title="제약뉴스 RSS 대시보드", page_icon="📰", layout="wide", initial_sidebar_state="collapsed")
 inject_css()
@@ -746,12 +745,11 @@ with dl1:
         use_container_width=True,
     )
 with dl2:
-    pdf_report_bytes = build_pdf_report(filtered_df, issue_groups_cache, start_date, end_date)
     st.download_button(
-        "📄 1Page PDF 리포트 다운로드",
-        data=pdf_report_bytes,
-        file_name=f"pharma_news_1page_report_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
-        mime="application/pdf",
+        "🧾 주간 리포트 다운로드",
+        data=build_weekly_report(filtered_df, issue_groups_cache, start_date, end_date),
+        file_name=f"pharma_news_weekly_report_{datetime.now().strftime('%Y%m%d_%H%M')}.md",
+        mime="text/markdown",
         use_container_width=True,
     )
 
