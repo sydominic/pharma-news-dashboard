@@ -3,7 +3,7 @@
     "hl": "ko",
     "gl": "KR",
     "ceid": "KR:ko",
-    "max_items_per_query": 80,
+    "max_items_per_query": 100,
     "timeout_sec": 12,
     "resolve_google_redirect": false
   },
@@ -55,6 +55,286 @@
       "source_hint": "약사공론",
       "query": "site:kpanews.co.kr 제약 OR 의약품 OR 식약처 OR 허가 OR 임상 OR 약가 OR 약국",
       "enabled": true
+    },
+    {
+      "name": "[핵심강화] 데일리팜 - 전체",
+      "source_hint": "데일리팜",
+      "query": "site:dailypharm.com",
+      "enabled": true,
+      "collection_group": "core_media_boost"
+    },
+    {
+      "name": "[핵심강화] 데일리팜 - 의약품",
+      "source_hint": "데일리팜",
+      "query": "site:dailypharm.com 의약품",
+      "enabled": true,
+      "collection_group": "core_media_boost"
+    },
+    {
+      "name": "[핵심강화] 데일리팜 - 식약처",
+      "source_hint": "데일리팜",
+      "query": "site:dailypharm.com 식약처",
+      "enabled": true,
+      "collection_group": "core_media_boost"
+    },
+    {
+      "name": "[핵심강화] 데일리팜 - 허가·임상",
+      "source_hint": "데일리팜",
+      "query": "site:dailypharm.com 허가 OR 임상",
+      "enabled": true,
+      "collection_group": "core_media_boost"
+    },
+    {
+      "name": "[핵심강화] 데일리팜 - 회수·처분",
+      "source_hint": "데일리팜",
+      "query": "site:dailypharm.com 회수 OR 처분 OR 행정처분",
+      "enabled": true,
+      "collection_group": "core_media_boost"
+    },
+    {
+      "name": "[핵심강화] 데일리팜 - GMP·품질",
+      "source_hint": "데일리팜",
+      "query": "site:dailypharm.com GMP OR 품질 OR 제조",
+      "enabled": true,
+      "collection_group": "core_media_boost"
+    },
+    {
+      "name": "[핵심강화] 데일리팜 - 약가·급여",
+      "source_hint": "데일리팜",
+      "query": "site:dailypharm.com 약가 OR 급여 OR 보험",
+      "enabled": true,
+      "collection_group": "core_media_boost"
+    },
+    {
+      "name": "[핵심강화] 데일리팜 - 정책·가이드",
+      "source_hint": "데일리팜",
+      "query": "site:dailypharm.com 가이드라인 OR 안내서 OR 고시 OR 행정예고",
+      "enabled": true,
+      "collection_group": "core_media_boost"
+    },
+    {
+      "name": "[핵심강화] 팜뉴스 - 전체",
+      "source_hint": "팜뉴스",
+      "query": "site:pharmnews.com",
+      "enabled": true,
+      "collection_group": "core_media_boost"
+    },
+    {
+      "name": "[핵심강화] 팜뉴스 - 의약품",
+      "source_hint": "팜뉴스",
+      "query": "site:pharmnews.com 의약품",
+      "enabled": true,
+      "collection_group": "core_media_boost"
+    },
+    {
+      "name": "[핵심강화] 팜뉴스 - 식약처",
+      "source_hint": "팜뉴스",
+      "query": "site:pharmnews.com 식약처",
+      "enabled": true,
+      "collection_group": "core_media_boost"
+    },
+    {
+      "name": "[핵심강화] 팜뉴스 - 허가·임상",
+      "source_hint": "팜뉴스",
+      "query": "site:pharmnews.com 허가 OR 임상",
+      "enabled": true,
+      "collection_group": "core_media_boost"
+    },
+    {
+      "name": "[핵심강화] 팜뉴스 - 회수·처분",
+      "source_hint": "팜뉴스",
+      "query": "site:pharmnews.com 회수 OR 처분 OR 행정처분",
+      "enabled": true,
+      "collection_group": "core_media_boost"
+    },
+    {
+      "name": "[핵심강화] 팜뉴스 - GMP·품질",
+      "source_hint": "팜뉴스",
+      "query": "site:pharmnews.com GMP OR 품질 OR 제조",
+      "enabled": true,
+      "collection_group": "core_media_boost"
+    },
+    {
+      "name": "[핵심강화] 팜뉴스 - 약가·급여",
+      "source_hint": "팜뉴스",
+      "query": "site:pharmnews.com 약가 OR 급여 OR 보험",
+      "enabled": true,
+      "collection_group": "core_media_boost"
+    },
+    {
+      "name": "[핵심강화] 팜뉴스 - 정책·가이드",
+      "source_hint": "팜뉴스",
+      "query": "site:pharmnews.com 가이드라인 OR 안내서 OR 고시 OR 행정예고",
+      "enabled": true,
+      "collection_group": "core_media_boost"
+    },
+    {
+      "name": "[핵심강화] 메디파나 - 전체",
+      "source_hint": "메디파나뉴스",
+      "query": "site:medipana.com",
+      "enabled": true,
+      "collection_group": "core_media_boost"
+    },
+    {
+      "name": "[핵심강화] 메디파나 - 의약품",
+      "source_hint": "메디파나뉴스",
+      "query": "site:medipana.com 의약품",
+      "enabled": true,
+      "collection_group": "core_media_boost"
+    },
+    {
+      "name": "[핵심강화] 메디파나 - 식약처",
+      "source_hint": "메디파나뉴스",
+      "query": "site:medipana.com 식약처",
+      "enabled": true,
+      "collection_group": "core_media_boost"
+    },
+    {
+      "name": "[핵심강화] 메디파나 - 허가·임상",
+      "source_hint": "메디파나뉴스",
+      "query": "site:medipana.com 허가 OR 임상",
+      "enabled": true,
+      "collection_group": "core_media_boost"
+    },
+    {
+      "name": "[핵심강화] 메디파나 - 회수·처분",
+      "source_hint": "메디파나뉴스",
+      "query": "site:medipana.com 회수 OR 처분 OR 행정처분",
+      "enabled": true,
+      "collection_group": "core_media_boost"
+    },
+    {
+      "name": "[핵심강화] 메디파나 - GMP·품질",
+      "source_hint": "메디파나뉴스",
+      "query": "site:medipana.com GMP OR 품질 OR 제조",
+      "enabled": true,
+      "collection_group": "core_media_boost"
+    },
+    {
+      "name": "[핵심강화] 메디파나 - 약가·급여",
+      "source_hint": "메디파나뉴스",
+      "query": "site:medipana.com 약가 OR 급여 OR 보험",
+      "enabled": true,
+      "collection_group": "core_media_boost"
+    },
+    {
+      "name": "[핵심강화] 메디파나 - 정책·가이드",
+      "source_hint": "메디파나뉴스",
+      "query": "site:medipana.com 가이드라인 OR 안내서 OR 고시 OR 행정예고",
+      "enabled": true,
+      "collection_group": "core_media_boost"
+    },
+    {
+      "name": "[핵심강화] 약업닷컴 - 전체",
+      "source_hint": "약업닷컴",
+      "query": "site:yakup.com",
+      "enabled": true,
+      "collection_group": "core_media_boost"
+    },
+    {
+      "name": "[핵심강화] 약업닷컴 - 의약품",
+      "source_hint": "약업닷컴",
+      "query": "site:yakup.com 의약품",
+      "enabled": true,
+      "collection_group": "core_media_boost"
+    },
+    {
+      "name": "[핵심강화] 약업닷컴 - 식약처",
+      "source_hint": "약업닷컴",
+      "query": "site:yakup.com 식약처",
+      "enabled": true,
+      "collection_group": "core_media_boost"
+    },
+    {
+      "name": "[핵심강화] 약업닷컴 - 허가·임상",
+      "source_hint": "약업닷컴",
+      "query": "site:yakup.com 허가 OR 임상",
+      "enabled": true,
+      "collection_group": "core_media_boost"
+    },
+    {
+      "name": "[핵심강화] 약업닷컴 - 회수·처분",
+      "source_hint": "약업닷컴",
+      "query": "site:yakup.com 회수 OR 처분 OR 행정처분",
+      "enabled": true,
+      "collection_group": "core_media_boost"
+    },
+    {
+      "name": "[핵심강화] 약업닷컴 - GMP·품질",
+      "source_hint": "약업닷컴",
+      "query": "site:yakup.com GMP OR 품질 OR 제조",
+      "enabled": true,
+      "collection_group": "core_media_boost"
+    },
+    {
+      "name": "[핵심강화] 약업닷컴 - 약가·급여",
+      "source_hint": "약업닷컴",
+      "query": "site:yakup.com 약가 OR 급여 OR 보험",
+      "enabled": true,
+      "collection_group": "core_media_boost"
+    },
+    {
+      "name": "[핵심강화] 약업닷컴 - 정책·가이드",
+      "source_hint": "약업닷컴",
+      "query": "site:yakup.com 가이드라인 OR 안내서 OR 고시 OR 행정예고",
+      "enabled": true,
+      "collection_group": "core_media_boost"
+    },
+    {
+      "name": "[핵심강화] 약사공론 - 전체",
+      "source_hint": "약사공론",
+      "query": "site:kpanews.co.kr",
+      "enabled": true,
+      "collection_group": "core_media_boost"
+    },
+    {
+      "name": "[핵심강화] 약사공론 - 의약품",
+      "source_hint": "약사공론",
+      "query": "site:kpanews.co.kr 의약품",
+      "enabled": true,
+      "collection_group": "core_media_boost"
+    },
+    {
+      "name": "[핵심강화] 약사공론 - 식약처",
+      "source_hint": "약사공론",
+      "query": "site:kpanews.co.kr 식약처",
+      "enabled": true,
+      "collection_group": "core_media_boost"
+    },
+    {
+      "name": "[핵심강화] 약사공론 - 허가·임상",
+      "source_hint": "약사공론",
+      "query": "site:kpanews.co.kr 허가 OR 임상",
+      "enabled": true,
+      "collection_group": "core_media_boost"
+    },
+    {
+      "name": "[핵심강화] 약사공론 - 회수·처분",
+      "source_hint": "약사공론",
+      "query": "site:kpanews.co.kr 회수 OR 처분 OR 행정처분",
+      "enabled": true,
+      "collection_group": "core_media_boost"
+    },
+    {
+      "name": "[핵심강화] 약사공론 - GMP·품질",
+      "source_hint": "약사공론",
+      "query": "site:kpanews.co.kr GMP OR 품질 OR 제조",
+      "enabled": true,
+      "collection_group": "core_media_boost"
+    },
+    {
+      "name": "[핵심강화] 약사공론 - 약가·급여",
+      "source_hint": "약사공론",
+      "query": "site:kpanews.co.kr 약가 OR 급여 OR 보험",
+      "enabled": true,
+      "collection_group": "core_media_boost"
+    },
+    {
+      "name": "[핵심강화] 약사공론 - 정책·가이드",
+      "source_hint": "약사공론",
+      "query": "site:kpanews.co.kr 가이드라인 OR 안내서 OR 고시 OR 행정예고",
+      "enabled": true,
+      "collection_group": "core_media_boost"
     },
     {
       "name": "의학신문 - 제약뉴스",

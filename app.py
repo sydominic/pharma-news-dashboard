@@ -32,7 +32,7 @@ DATA_DIR = BASE_DIR / "data"
 CONFIG_PATH = DATA_DIR / "rss_sources.json"
 RAW_PATH = DATA_DIR / "news_raw.csv"
 CLEAN_PATH = DATA_DIR / "news_clean.csv"
-APP_VERSION = "v1.22"
+APP_VERSION = "v1.23"
 
 st.set_page_config(page_title="제약뉴스 RSS 대시보드", page_icon="📰", layout="wide", initial_sidebar_state="collapsed")
 inject_css()
@@ -570,6 +570,9 @@ def source_status() -> str:
     try:
         cfg = load_rss_config(CONFIG_PATH)
         enabled = [q for q in cfg.get("queries", []) if q.get("enabled", True)]
+        boosted = [q for q in enabled if q.get("collection_group") == "core_media_boost"]
+        if boosted:
+            return f"등록 검색식 {len(enabled)}개 · 핵심언론 강화 {len(boosted)}개"
         return f"등록 검색식 {len(enabled)}개"
     except Exception:
         return "RSS 설정 확인 필요"
@@ -695,7 +698,7 @@ with st.container(border=True):
     with c5:
         collect_days = st.selectbox("RSS 수집기간", [1, 3, 7, 14, 30, 90], index=2, format_func=lambda x: f"최근 {x}일", label_visibility="collapsed")
     with c6:
-        max_items = st.selectbox("쿼리당 수집", [50, 80, 100], index=1, format_func=lambda x: f"{x}건/식", label_visibility="collapsed")
+        max_items = st.selectbox("쿼리당 수집", [50, 80, 100], index=2, format_func=lambda x: f"{x}건/식", label_visibility="collapsed")
 
     b1, b2, b3, b4 = st.columns([1.25, 1.0, 1.0, 3.2])
     with b1:
