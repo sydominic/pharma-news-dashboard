@@ -24,7 +24,7 @@ from modules.news_cleaner import (
     to_excel_bytes,
 )
 from modules.policy_links import extract_policy_articles, mfds_board_links, mfds_board_home_links
-from modules.pdf_report import build_pdf_report
+from modules.pdf_report import build_pdf_report, build_report_png
 from modules.rss_collector import collect_google_news, load_rss_config
 from modules.ui_components import article_card, esc, header, inject_css, kpi_card, keyword_pills, section_title, timeline_item, title_with_link
 
@@ -33,7 +33,7 @@ DATA_DIR = BASE_DIR / "data"
 CONFIG_PATH = DATA_DIR / "rss_sources.json"
 RAW_PATH = DATA_DIR / "news_raw.csv"
 CLEAN_PATH = DATA_DIR / "news_clean.csv"
-APP_VERSION = "v1.18"
+APP_VERSION = "v1.19"
 
 st.set_page_config(page_title="제약뉴스 RSS 대시보드", page_icon="📰", layout="wide", initial_sidebar_state="collapsed")
 inject_css()
@@ -736,7 +736,7 @@ render_link_diagnostics(all_df, filtered_df)
 excel_bytes = to_excel_bytes(filtered_df)
 issue_groups_cache = group_similar_issues(filtered_df, max_groups=8)
 
-dl1, dl2 = st.columns([1.0, 1.15])
+dl1, dl2, dl3 = st.columns([1.0, 1.05, 1.05])
 with dl1:
     st.download_button(
         "📥 현재 조회 결과 엑셀 다운로드",
@@ -745,8 +745,17 @@ with dl1:
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True,
     )
+report_png_bytes = build_report_png(filtered_df, issue_groups_cache, start_date, end_date)
+pdf_report_bytes = build_pdf_report(filtered_df, issue_groups_cache, start_date, end_date)
 with dl2:
-    pdf_report_bytes = build_pdf_report(filtered_df, issue_groups_cache, start_date, end_date)
+    st.download_button(
+        "🖼️ 1Page 리포트 이미지 다운로드",
+        data=report_png_bytes,
+        file_name=f"pharma_news_1page_report_{datetime.now().strftime('%Y%m%d_%H%M')}.png",
+        mime="image/png",
+        use_container_width=True,
+    )
+with dl3:
     st.download_button(
         "📄 1Page PDF 리포트 다운로드",
         data=pdf_report_bytes,
