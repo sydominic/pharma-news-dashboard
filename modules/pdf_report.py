@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from io import BytesIO
+from pathlib import Path
 import re
 
 import pandas as pd
@@ -25,13 +26,48 @@ _FONT_BOLD_PATHS = [
 ]
 
 
-def _load_font(candidates: list[str], size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    for path in candidates:
+def _font_candidates(extra_candidates: list[str]) -> list[str]:
+    """Return Korean font candidates available on local/Streamlit Cloud Linux.
+
+    Streamlit Cloud does not reliably include Korean fonts by default, so the
+    repository includes packages.txt to apt-install fonts-nanum and fonts-noto-cjk.
+    This function searches those installed paths rather than relying on one fixed
+    path only.
+    """
+    candidates = list(extra_candidates)
+    search_roots = [
+        Path("/usr/share/fonts/truetype/nanum"),
+        Path("/usr/share/fonts/truetype/unfonts-core"),
+        Path("/usr/share/fonts/opentype/noto"),
+        Path("/usr/local/share/fonts"),
+    ]
+    patterns = [
+        "*NanumGothic*Bold*.ttf",
+        "*NanumGothic*.ttf",
+        "*UnDotum*Bold*.ttf",
+        "*UnDotum*.ttf",
+        "*NotoSansCJK*Bold*.ttc",
+        "*NotoSansCJK*Regular*.ttc",
+    ]
+    for root in search_roots:
+        if not root.exists():
+            continue
+        for pattern in patterns:
+            candidates.extend(str(x) for x in root.glob(pattern))
+    # preserve order, remove duplicates
+    return list(dict.fromkeys(candidates))
+
+
+def _load_font(candidates: list[str], size: int) -> ImageFont.FreeTypeFont:
+    for path in _font_candidates(candidates):
         try:
             return ImageFont.truetype(path, size=size)
         except Exception:
             continue
-    return ImageFont.load_default()
+    raise RuntimeError(
+        "Korean font not found. For Streamlit Cloud, ensure packages.txt includes "
+        "fonts-nanum and fonts-noto-cjk, then reboot/redeploy the app."
+    )
 
 
 # ---------- palette ----------
