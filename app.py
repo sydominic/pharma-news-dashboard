@@ -1,23 +1,5 @@
 from __future__ import annotations
 
-import importlib.util
-import subprocess
-import sys
-
-_REQUIRED_PACKAGES = {
-    "pandas": "pandas",
-    "plotly": "plotly",
-    "streamlit": "streamlit",
-    "feedparser": "feedparser",
-    "requests": "requests",
-    "bs4": "beautifulsoup4",
-    "openpyxl": "openpyxl",
-    "dateutil": "python-dateutil",
-}
-_missing = [pip_name for import_name, pip_name in _REQUIRED_PACKAGES.items() if importlib.util.find_spec(import_name) is None]
-if _missing:
-    subprocess.check_call([sys.executable, "-m", "pip", "install", *_missing])
-
 from collections import Counter
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -30,14 +12,11 @@ import streamlit as st
 from modules.classifier import CATEGORY_ORDER, category_palette
 from modules.news_cleaner import (
     STANDARD_COLUMNS,
-    RETENTION_GENERAL_DAYS,
-    RETENTION_LONG_DAYS,
     filter_news,
     load_news,
     merge_existing,
     normalize_and_classify,
     repair_and_reclassify,
-    retention_summary,
     sample_news,
     save_news,
     to_excel_bytes,
@@ -51,12 +30,43 @@ DATA_DIR = BASE_DIR / "data"
 CONFIG_PATH = DATA_DIR / "rss_sources.json"
 RAW_PATH = DATA_DIR / "news_raw.csv"
 CLEAN_PATH = DATA_DIR / "news_clean.csv"
-APP_VERSION = "v1.13.3"
+APP_VERSION = "v1.14-stable"
 
 st.set_page_config(page_title="제약뉴스 RSS 대시보드", page_icon="📰", layout="wide", initial_sidebar_state="collapsed")
 inject_css()
 
 IMPORTANCE_ORDER = {"높음": 3, "중간": 2, "일반": 1}
+
+
+def _read_app_password() -> str:
+    """Streamlit Cloud secrets에서 APP_PASSWORD를 읽습니다. 값이 없으면 공개 모드로 실행합니다."""
+    try:
+        value = st.secrets.get("APP_PASSWORD", "")
+    except Exception:
+        value = ""
+    return str(value or "").strip()
+
+
+def require_password_if_configured() -> None:
+    """APP_PASSWORD가 설정된 경우에만 간단한 접속 비밀번호를 요구합니다."""
+    app_password = _read_app_password()
+    if not app_password:
+        return
+    if st.session_state.get("pharma_news_auth_ok"):
+        return
+
+    header("제약뉴스 RSS 대시보드", "온라인 접속 보호가 설정되어 있습니다.")
+    st.info("관리자가 설정한 접속 비밀번호를 입력해 주세요.")
+    with st.form("password_form"):
+        entered = st.text_input("비밀번호", type="password")
+        submitted = st.form_submit_button("접속")
+    if submitted:
+        if entered == app_password:
+            st.session_state["pharma_news_auth_ok"] = True
+            st.rerun()
+        else:
+            st.error("비밀번호가 맞지 않습니다.")
+    st.stop()
 
 
 KEYWORD_EXCLUDE_EXACT = {
@@ -137,49 +147,22 @@ def collect_and_save(start_date=None, end_date=None, max_items_per_query: int | 
 
 def load_or_collect_initial() -> pd.DataFrame:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-
-    # 1) 기존 누적 파일 로드/보정
+    df = load_news(CLEAN_PATH)
+    if not df.empty:
+        # v1.4 분류체계(정책/가이드라인 포함)로 기존 누적자료를 다시 보정
+        df = repair_and_reclassify(df, force=True)
+        save_news(df, CLEAN_PATH)
+        return df
     try:
-        df = load_news(CLEAN_PATH)
-        if not df.empty:
-            df = repair_and_reclassify(df, force=True)
-            save_news(df, CLEAN_PATH)
-            return df
-    except Exception as exc:
-        st.warning(f"기존 누적 데이터 로드/보정 단계에서 오류가 발생했습니다. 최초 수집을 시도합니다. 오류: {exc}")
-
-    # 2) 최초 RSS 수집
-    try:
-        today = date.today()
         with st.spinner("최초 실행: 최근 7일 Google News RSS에서 기사 수집 중입니다..."):
-            raw = collect_google_news(CONFIG_PATH, start_date=today - timedelta(days=6), end_date=today)
-        errors = raw.attrs.get("errors", []) if hasattr(raw, "attrs") else []
-        if not raw.empty:
-            raw.to_csv(RAW_PATH, index=False, encoding="utf-8-sig")
-    except Exception as exc:
-        st.warning(f"RSS 수집 단계에서 오류가 발생했습니다. 화면 확인용 샘플 데이터를 표시합니다. 오류: {exc}")
-        return sample_news()
-
-    # 3) 정규화/분류
-    try:
-        clean = normalize_and_classify(raw)
-    except Exception as exc:
-        st.warning(f"RSS 데이터 정규화/분류 단계에서 오류가 발생했습니다. 화면 확인용 샘플 데이터를 표시합니다. 오류: {exc}")
-        return sample_news()
-
-    # 4) 병합/보관정책/저장
-    try:
-        existing = load_news(CLEAN_PATH)
-        merged = merge_existing(existing, clean)
-        save_news(merged, CLEAN_PATH)
+            today = date.today()
+            df, errors, _ = collect_and_save(start_date=today - timedelta(days=6), end_date=today)
         if errors:
             st.warning("일부 RSS 검색식에서 수집 오류가 있었습니다. 수집된 데이터는 정상 표시합니다.")
-        if not merged.empty:
-            return merged
+        if not df.empty:
+            return df
     except Exception as exc:
-        st.warning(f"병합/보관정책/저장 단계에서 오류가 발생했습니다. 화면 확인용 샘플 데이터를 표시합니다. 오류: {exc}")
-        return sample_news()
-
+        st.warning(f"RSS 최초 수집에 실패했습니다. 화면 확인용 샘플 데이터를 표시합니다. 오류: {exc}")
     return sample_news()
 
 
@@ -187,7 +170,7 @@ def prepare_display_df(df: pd.DataFrame) -> pd.DataFrame:
     work = repair_and_reclassify(df, force=False).copy()
     for col in STANDARD_COLUMNS:
         if col not in work.columns:
-            work[col] = False if col == "qa_flag" else ""
+            work[col] = ""
     work["published_at_dt"] = pd.to_datetime(work["published_at"], errors="coerce")
     work = work.sort_values("published_at_dt", ascending=False)
     work["published_at"] = work["published_at_dt"].dt.strftime("%Y-%m-%d %H:%M:%S").fillna("")
@@ -512,32 +495,6 @@ def render_collect_scope_popover() -> None:
             st.markdown("v1.4부터 after/before 날짜 검색식을 붙여 날짜 기준으로 수집합니다.")
 
 
-
-def render_retention_policy_popover(all_data: pd.DataFrame) -> None:
-    """보관정책 안내 및 현재 보관 현황 표시."""
-    summary = retention_summary(all_data)
-    policy_text = f"""
-    - **일반 기사**: 최근 **{RETENTION_GENERAL_DAYS}일** 유지
-    - **장기보관 기사**: 최근 **{RETENTION_LONG_DAYS}일** 유지
-    - **장기보관 대상**: 중요도 높음, 정책/가이드라인, 회수/처분, GMP/품질 기사
-    - 수집/저장 시 오래된 일반 기사는 자동 정리됩니다.
-    - 통계 파일은 `category_monthly_stats.csv`, `keyword_weekly_stats.csv`, `retention_summary.csv`로 별도 생성됩니다.
-    """
-    if hasattr(st, "popover"):
-        with st.popover("ⓘ 보관정책", use_container_width=True):
-            st.markdown(policy_text)
-            if summary.empty:
-                st.info("표시할 보관 현황이 없습니다.")
-            else:
-                render_pretty_table(summary, ["보관구분", "보관기간", "기사 수"], max_rows=10)
-    else:
-        with st.expander("ⓘ 보관정책"):
-            st.markdown(policy_text)
-            if summary.empty:
-                st.info("표시할 보관 현황이 없습니다.")
-            else:
-                render_pretty_table(summary, ["보관구분", "보관기간", "기사 수"], max_rows=10)
-
 def render_policy_card(row: pd.Series) -> None:
     source = esc(row.get("source", ""))
     published = esc(row.get("published_at", ""))
@@ -546,6 +503,9 @@ def render_policy_card(row: pd.Series) -> None:
     html = f"<div class='policy-box wide'><div class='news-meta'><span class='source-name'>{source}</span><span>{published}</span><span class='tag'>{ptype}</span></div>{title_html}</div>"
     st.markdown(html, unsafe_allow_html=True)
 
+
+# 온라인 접속 보호: Streamlit secrets에 APP_PASSWORD가 있을 때만 동작
+require_password_if_configured()
 
 # 데이터 로드
 all_df = prepare_display_df(load_or_collect_initial())
@@ -583,7 +543,7 @@ with st.container(border=True):
     with c6:
         max_items = st.selectbox("쿼리당 수집", [50, 80, 100], index=1, format_func=lambda x: f"{x}건/식", label_visibility="collapsed")
 
-    b1, b2, b3, b4, b5 = st.columns([1.25, 1.0, 1.0, 1.0, 2.8])
+    b1, b2, b3, b4 = st.columns([1.25, 1.0, 1.0, 3.2])
     with b1:
         collect_clicked = st.button(f"🛰️ RSS 수집", type="primary", use_container_width=True)
     with b2:
@@ -591,9 +551,7 @@ with st.container(border=True):
     with b3:
         render_collect_scope_popover()
     with b4:
-        render_retention_policy_popover(all_df)
-    with b5:
-        st.caption(f"데이터 상태: {source_status()} · 보관정책 적용 중 · 원문은 Google News RSS 링크를 통해 열립니다.")
+        st.caption(f"데이터 상태: {source_status()} · 온라인 안정화 버전 · 원문은 Google News RSS 링크를 통해 열립니다.")
 
 if isinstance(selected_range, tuple) and len(selected_range) == 2:
     start_date, end_date = selected_range

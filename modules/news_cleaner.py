@@ -16,19 +16,10 @@ STANDARD_COLUMNS: List[str] = [
     "title", "summary", "link", "rss_query_name", "rss_query", "collected_at"
 ]
 
+TEXT_COLUMNS = [c for c in STANDARD_COLUMNS if c != "qa_flag"]
 VALID_CATEGORIES = set(CATEGORY_ORDER + ["기타"])
-NULL_LIKE = {"", "nan", "none", "nat", "null", "na", "n/a"}
+NULL_LIKE = {"", "nan", "none", "nat", "null", "na", "n/a", "<na>"}
 LINK_CANDIDATE_COLUMNS = ["link", "url", "article_url", "google_link", "rss_link", "source_url", "article_link", "origin_link"]
-
-RETENTION_GENERAL_DAYS = 90
-RETENTION_LONG_DAYS = 1095
-LONG_RETENTION_CATEGORIES = {"정책/가이드라인", "회수/처분", "GMP/품질"}
-LONG_RETENTION_IMPORTANCE = {"높음"}
-
-BOOLEAN_COLUMNS = {"qa_flag"}
-TEXT_COLUMNS = [c for c in STANDARD_COLUMNS if c not in BOOLEAN_COLUMNS]
-DEFAULT_COLUMN_VALUES = {col: "" for col in TEXT_COLUMNS}
-DEFAULT_COLUMN_VALUES.update({"qa_flag": False})
 
 
 def ensure_data_dir(path: str | Path) -> None:
@@ -38,6 +29,11 @@ def ensure_data_dir(path: str | Path) -> None:
 def clean_text(value: object) -> str:
     if value is None:
         return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except Exception:
+        pass
     text = str(value).strip()
     if text.lower() in NULL_LIKE:
         return ""
@@ -46,9 +42,11 @@ def clean_text(value: object) -> str:
         if new_text == text:
             break
         text = new_text
-    # Google News summary나 이전 버전 CSV에 HTML 조각이 들어간 경우 제거
     if "<" in text and ">" in text:
-        text = BeautifulSoup(text, "html.parser").get_text(" ", strip=True)
+        try:
+            text = BeautifulSoup(text, "html.parser").get_text(" ", strip=True)
+        except Exception:
+            pass
     text = re.sub(r"<[^>]+>", " ", text)
     text = re.sub(r"https?://\S+", " ", text)
     text = text.replace("원문 열기 ↗", " ").replace("중요도 nan", " ").replace("nan", " ")
@@ -59,13 +57,13 @@ def clean_text(value: object) -> str:
 
 
 def clean_link(value: object) -> str:
-    """URL은 일반 텍스트 정리와 다르게 보존한다.
-
-    v1.9까지는 link 컬럼에도 clean_text()를 적용하면서
-    https://... 문자열이 제거되어 원문 버튼이 생성되지 않았다.
-    """
     if value is None:
         return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except Exception:
+        pass
     text = str(value).strip()
     if not text or text.lower() in NULL_LIKE:
         return ""
@@ -75,10 +73,13 @@ def clean_link(value: object) -> str:
             break
         text = new_text
     if "<" in text and ">" in text:
-        soup = BeautifulSoup(text, "html.parser")
-        a = soup.find("a", href=True)
-        if a and a.get("href"):
-            text = str(a.get("href")).strip()
+        try:
+            soup = BeautifulSoup(text, "html.parser")
+            a = soup.find("a", href=True)
+            if a and a.get("href"):
+                text = str(a.get("href")).strip()
+        except Exception:
+            pass
     match = re.search(r"https?://[^\s\'\"<>]+", text)
     if match:
         return match.group(0).strip().rstrip(".,);]")
@@ -96,7 +97,6 @@ def recover_link_from_candidates(row: pd.Series) -> str:
 
 def clean_title(value: object) -> str:
     text = clean_text(value)
-    # Google News title에 이미 붙는 끝부분 언론사명은 유지해도 되지만, 너무 긴 반복만 완화
     text = re.sub(r"\s+-\s+Google 뉴스$", "", text)
     return text
 
@@ -107,7 +107,6 @@ def clean_summary(value: object) -> str:
     if any(marker in raw for marker in bad_markers):
         return ""
     text = clean_text(value)
-    # v1.1 화면 HTML이 저장/표시된 흔적이 있으면 요약으로 쓰지 않음
     if any(marker in text for marker in bad_markers):
         return ""
     if text.lower() in NULL_LIKE:
@@ -115,115 +114,34 @@ def clean_summary(value: object) -> str:
     return text[:400]
 
 
-def retention_bucket(category: object, importance: object) -> str:
-    category_text = clean_text(category)
-    importance_text = clean_text(importance)
-    if importance_text in LONG_RETENTION_IMPORTANCE or category_text in LONG_RETENTION_CATEGORIES:
-        return "long_term"
-    return "general"
-
-
-def retention_days_for_row(row: pd.Series) -> int:
-    bucket = retention_bucket(row.get("category", ""), row.get("importance", ""))
-    return RETENTION_LONG_DAYS if bucket == "long_term" else RETENTION_GENERAL_DAYS
-
-
-def apply_retention_policy(df: pd.DataFrame, as_of: pd.Timestamp | None = None) -> pd.DataFrame:
-    if df is None or df.empty:
-        return pd.DataFrame(columns=df.columns if df is not None else STANDARD_COLUMNS)
-    work = df.copy()
-    as_of = as_of or pd.Timestamp.now().normalize()
-    work["published_at_dt"] = pd.to_datetime(work["published_at"], errors="coerce")
-    work = work.dropna(subset=["published_at_dt"]).copy()
-    work["retention_bucket"] = work.apply(lambda r: retention_bucket(r.get("category", ""), r.get("importance", "")), axis=1)
-    work["retention_days"] = work.apply(retention_days_for_row, axis=1)
-    cutoff = work["published_at_dt"] + pd.to_timedelta(work["retention_days"], unit="D")
-    kept = work[cutoff >= as_of].copy()
-    return kept.drop(columns=["published_at_dt", "retention_bucket", "retention_days"], errors="ignore").reset_index(drop=True)
-
-
-def retention_summary(df: pd.DataFrame, as_of: pd.Timestamp | None = None) -> pd.DataFrame:
-    columns = ["보관구분", "보관기간", "기사 수"]
-    if df is None or df.empty:
-        return pd.DataFrame(columns=columns)
-    as_of = as_of or pd.Timestamp.now().normalize()
-    work = repair_and_reclassify(df, force=False).copy()
-    work["published_at_dt"] = pd.to_datetime(work["published_at"], errors="coerce")
-    work = work.dropna(subset=["published_at_dt"]).copy()
-    work["보관구분"] = work.apply(lambda r: "장기보관" if retention_bucket(r.get("category", ""), r.get("importance", "")) == "long_term" else "일반보관", axis=1)
-    work["보관기간"] = work["보관구분"].map({"일반보관": f"{RETENTION_GENERAL_DAYS}일", "장기보관": f"{RETENTION_LONG_DAYS}일"})
-    summary = work.groupby(["보관구분", "보관기간"], dropna=False).size().reset_index(name="기사 수")
-    order = {"일반보관": 1, "장기보관": 2}
-    summary["_o"] = summary["보관구분"].map(order).fillna(99)
-    return summary.sort_values(["_o", "보관기간"]).drop(columns=["_o"]).reset_index(drop=True)
-
-
-def write_retention_stats(df: pd.DataFrame, data_dir: str | Path) -> None:
-    if df is None or df.empty:
-        return
-    data_path = Path(data_dir)
-    data_path.mkdir(parents=True, exist_ok=True)
-    work = repair_and_reclassify(df, force=False).copy()
-    work["published_at_dt"] = pd.to_datetime(work["published_at"], errors="coerce")
-    work = work.dropna(subset=["published_at_dt"]).copy()
-
-    monthly = work.copy()
-    monthly["month"] = monthly["published_at_dt"].dt.to_period("M").astype(str)
-    monthly_stats = monthly.groupby(["month", "category"], dropna=False).size().reset_index(name="count")
-    monthly_stats.to_csv(data_path / "category_monthly_stats.csv", index=False, encoding="utf-8-sig")
-
-    weekly_rows = []
-    for period, group in work.groupby(work["published_at_dt"].dt.to_period("W-MON")):
-        counter = {}
-        for value in group["keywords"].fillna(""):
-            for keyword in str(value).split(","):
-                kw = keyword.strip()
-                if kw:
-                    counter[kw] = counter.get(kw, 0) + 1
-        week_start = period.start_time.date().isoformat()
-        week_end = period.end_time.date().isoformat()
-        for kw, count in sorted(counter.items(), key=lambda x: (-x[1], x[0])):
-            weekly_rows.append({"week_start": week_start, "week_end": week_end, "keyword": kw, "count": count})
-    pd.DataFrame(weekly_rows, columns=["week_start", "week_end", "keyword", "count"]).to_csv(data_path / "keyword_weekly_stats.csv", index=False, encoding="utf-8-sig")
-
-    retention_summary(work).to_csv(data_path / "retention_summary.csv", index=False, encoding="utf-8-sig")
-
-
 def normalize_bool(value: object) -> bool:
     if isinstance(value, bool):
         return value
+    try:
+        if pd.isna(value):
+            return False
+    except Exception:
+        pass
     text = str(value).strip().lower()
     return text in {"true", "1", "yes", "y", "중간", "높음"}
 
 
-def needs_reclassify(row: pd.Series) -> bool:
-    category = clean_text(row.get("category", ""))
-    keywords = clean_text(row.get("keywords", ""))
-    importance = clean_text(row.get("importance", ""))
-    if category not in VALID_CATEGORIES:
-        return True
-    if category in {"기타"}:
-        return True
-    if not keywords:
-        return True
-    if importance not in {"높음", "중간", "일반"}:
-        return True
-    return False
+def make_empty_frame() -> pd.DataFrame:
+    out = pd.DataFrame(columns=STANDARD_COLUMNS)
+    out["qa_flag"] = pd.Series(dtype="bool")
+    return out
 
 
 def repair_and_reclassify(df: pd.DataFrame, force: bool = False) -> pd.DataFrame:
-    """RSS/CSV 데이터를 표준 컬럼으로 정규화하고 재분류한다.
+    """RSS/CSV 데이터를 표준 컬럼으로 정규화한다.
 
-    v1.13.3 핵심 수정:
-    pandas 2.3+/Streamlit Cloud 환경에서 string dtype 컬럼에 bool/datetime 값을
-    부분 대입하면 `Invalid value for dtype 'str'` 오류가 발생할 수 있다.
-    따라서 기존처럼 DataFrame 컬럼을 만든 뒤 loc로 값을 대입하지 않고,
-    행 단위 Python dict를 새로 구성한 뒤 마지막에 DataFrame을 생성한다.
+    v1.14 안정화 핵심:
+    - 보관정책/retention 파이프라인 제거
+    - 기존 DataFrame에 부분 대입하지 않고 row dict를 새로 구성
+    - string dtype 컬럼에 bool/datetime 값을 넣는 구조 제거
     """
     if df is None or df.empty:
-        empty = pd.DataFrame(columns=STANDARD_COLUMNS)
-        empty["qa_flag"] = pd.Series(dtype="bool")
-        return empty
+        return make_empty_frame()
 
     records = []
     input_df = df.copy()
@@ -290,42 +208,34 @@ def repair_and_reclassify(df: pd.DataFrame, force: bool = False) -> pd.DataFrame
 
     out = pd.DataFrame.from_records(records, columns=STANDARD_COLUMNS)
     if out.empty:
-        empty = pd.DataFrame(columns=STANDARD_COLUMNS)
-        empty["qa_flag"] = pd.Series(dtype="bool")
-        return empty
+        return make_empty_frame()
 
-    # 최종 dtype은 신규 DataFrame 생성 후 한 번만 안정화한다.
     for col in TEXT_COLUMNS:
-        if col in out.columns:
-            out[col] = out[col].fillna("").astype("object")
+        out[col] = out[col].fillna("").astype("object")
     out["qa_flag"] = out["qa_flag"].apply(normalize_bool).astype("bool")
-
     out = out.drop_duplicates(subset=["uid"], keep="first")
     return out.sort_values("published_at", ascending=False).reset_index(drop=True)
 
 
 def normalize_and_classify(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
-        return pd.DataFrame(columns=STANDARD_COLUMNS)
+        return make_empty_frame()
     return repair_and_reclassify(df, force=True)
 
 
 def load_news(path: str | Path) -> pd.DataFrame:
     p = Path(path)
     if not p.exists():
-        return pd.DataFrame(columns=STANDARD_COLUMNS)
-    df = pd.read_csv(p, encoding="utf-8-sig")
-    repaired = repair_and_reclassify(df, force=False)
-    return apply_retention_policy(repaired)
+        return make_empty_frame()
+    df = pd.read_csv(p, encoding="utf-8-sig", dtype="object")
+    return repair_and_reclassify(df, force=False)
 
 
 def save_news(df: pd.DataFrame, path: str | Path) -> None:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     repaired = repair_and_reclassify(df, force=False)
-    retained = apply_retention_policy(repaired)
-    retained.to_csv(p, index=False, encoding="utf-8-sig")
-    write_retention_stats(retained, p.parent)
+    repaired.to_csv(p, index=False, encoding="utf-8-sig")
 
 
 def merge_existing(existing: pd.DataFrame, new: pd.DataFrame) -> pd.DataFrame:
@@ -335,28 +245,22 @@ def merge_existing(existing: pd.DataFrame, new: pd.DataFrame) -> pd.DataFrame:
     if new is not None and not new.empty:
         frames.append(new)
     if not frames:
-        return pd.DataFrame(columns=STANDARD_COLUMNS)
+        return make_empty_frame()
 
-    merged = pd.concat(frames, ignore_index=True)
-    for col in STANDARD_COLUMNS:
-        if col not in merged.columns:
-            merged[col] = ""
+    merged = pd.concat(frames, ignore_index=True).astype("object")
     merged = repair_and_reclassify(merged, force=False)
 
-    # 같은 기사(uid)가 기존 CSV에는 link 공란, 신규 수집에는 link 보유 상태로 들어올 수 있다.
-    # 이 경우 원문 버튼 복구를 위해 link가 있는 행을 우선 보존한다.
     merged["_has_link"] = merged["link"].apply(lambda x: bool(clean_link(x)))
     merged["published_at_dt"] = pd.to_datetime(merged["published_at"], errors="coerce")
     merged = merged.sort_values(["uid", "_has_link", "published_at_dt"], ascending=[True, False, False])
     merged = merged.drop_duplicates(subset=["uid"], keep="first")
     merged = merged.sort_values("published_at_dt", ascending=False).drop(columns=["published_at_dt", "_has_link"])
-    merged = apply_retention_policy(merged)
     return merged.reset_index(drop=True)
 
 
 def filter_news(df: pd.DataFrame, start_date, end_date, categories: Iterable[str], sources: Iterable[str], keyword: str) -> pd.DataFrame:
     if df is None or df.empty:
-        return pd.DataFrame(columns=STANDARD_COLUMNS)
+        return make_empty_frame()
     work = repair_and_reclassify(df, force=False)
     work["published_at_dt"] = pd.to_datetime(work["published_at"], errors="coerce")
 
