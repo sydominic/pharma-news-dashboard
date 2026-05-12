@@ -225,66 +225,43 @@ def render_keyword_bar(df: pd.DataFrame, title: str = "키워드 TOP 10") -> Non
     st.plotly_chart(fig, use_container_width=True)
 
 
-def keyword_trend(df: pd.DataFrame, top_n: int = 5) -> pd.DataFrame:
-    counter = count_keywords(df)
-    top_keywords = [kw for kw, _ in counter.most_common(top_n)]
-    rows = []
-    for _, row in df.iterrows():
-        d = row.get("date", "")
-        keywords = [x.strip() for x in str(row.get("keywords", "")).split(",") if x.strip()]
-        for kw in keywords:
-            if kw in top_keywords:
-                rows.append({"date": d, "keyword": kw, "count": 1})
-    if not rows:
-        return pd.DataFrame(columns=["date", "keyword", "count"])
-    trend = pd.DataFrame(rows).groupby(["date", "keyword"], as_index=False)["count"].sum()
-    trend["date"] = pd.to_datetime(trend["date"], errors="coerce")
+def category_trend(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame(columns=["date", "category", "count"])
+    work = df.copy()
+    work["date"] = pd.to_datetime(work["date"], errors="coerce")
+    work["category"] = work["category"].fillna("산업/경영").astype(str).replace({"": "산업/경영", "nan": "산업/경영", "None": "산업/경영"})
+    trend = work.dropna(subset=["date"]).groupby(["date", "category"], as_index=False).size().rename(columns={"size": "count"})
     return trend.sort_values("date")
 
 
-def render_keyword_trend(df: pd.DataFrame) -> None:
-    trend = keyword_trend(df)
+def render_category_trend(df: pd.DataFrame) -> None:
+    trend = category_trend(df)
     if trend.empty:
-        st.info("표시할 키워드 추이 데이터가 없습니다.")
+        st.info("표시할 카테고리 추이 데이터가 없습니다.")
         return
-    fig = px.line(trend, x="date", y="count", color="keyword", markers=True, title="키워드 트렌드 추이")
-    fig.update_layout(height=380, margin=dict(l=10, r=10, t=46, b=10), xaxis_title="일자", yaxis_title="기사 수")
+    fig = px.line(
+        trend,
+        x="date",
+        y="count",
+        color="category",
+        markers=True,
+        title="카테고리 추이",
+        color_discrete_map=category_palette(),
+    )
+    fig.update_layout(height=380, margin=dict(l=10, r=10, t=46, b=10), xaxis_title="일자", yaxis_title="기사 수", legend_title_text="")
     st.plotly_chart(fig, use_container_width=True)
 
 
-def rising_keywords(df: pd.DataFrame) -> pd.DataFrame:
-    """현재 데이터 기준 최신일이 속한 ISO 주차와 직전 주차를 비교합니다."""
-    columns = ["keyword", "현재 주", "직전 주", "증감"]
-    if df.empty:
-        return pd.DataFrame(columns=columns)
-    work = df.copy()
-    work["dt"] = pd.to_datetime(work["date"], errors="coerce")
-    max_dt = work["dt"].max()
-    if pd.isna(max_dt):
-        return pd.DataFrame(columns=columns)
+def category_top_table(df: pd.DataFrame, limit: int = 7) -> pd.DataFrame:
+    counts = category_counts(df)
+    if counts.empty:
+        return pd.DataFrame(columns=["카테고리", "기사 수", "비중"])
+    total = counts["count"].sum()
+    out = counts.sort_values("count", ascending=False).head(limit).copy()
+    out["ratio"] = out["count"].apply(lambda x: f"{(x / total * 100):.1f}%" if total else "0.0%")
+    return out.rename(columns={"category": "카테고리", "count": "기사 수", "ratio": "비중"})
 
-    # 대시보드 데이터의 최신일이 속한 주(월~일)를 현재 주로 봅니다.
-    current_monday = (max_dt - pd.Timedelta(days=int(max_dt.weekday()))).normalize()
-    current_sunday = current_monday + pd.Timedelta(days=6)
-    previous_monday = current_monday - pd.Timedelta(days=7)
-    previous_sunday = current_monday - pd.Timedelta(days=1)
-
-    current = work[(work["dt"] >= current_monday) & (work["dt"] <= current_sunday)]
-    previous = work[(work["dt"] >= previous_monday) & (work["dt"] <= previous_sunday)]
-    current_counter = count_keywords(current)
-    previous_counter = count_keywords(previous)
-    rows = []
-    for kw in set(current_counter.keys()) | set(previous_counter.keys()):
-        rows.append({
-            "keyword": kw,
-            "현재 주": current_counter.get(kw, 0),
-            "직전 주": previous_counter.get(kw, 0),
-            "증감": current_counter.get(kw, 0) - previous_counter.get(kw, 0),
-        })
-    out = pd.DataFrame(rows).sort_values(["증감", "현재 주"], ascending=False).head(7)
-    out.attrs["current_week"] = f"{current_monday.date()} ~ {current_sunday.date()}"
-    out.attrs["previous_week"] = f"{previous_monday.date()} ~ {previous_sunday.date()}"
-    return out
 
 def category_keyword_summary(df: pd.DataFrame) -> pd.DataFrame:
     rows = []
@@ -647,22 +624,16 @@ with tab_news:
 
 with tab_keyword:
     st.subheader("🔎 키워드 인텔리전스")
-    counter = count_keywords(filtered_df)
-    if counter:
-        keyword_pills(counter.most_common(18))
     c1, c2 = st.columns([1.45, 1], gap="large")
     with c1:
-        render_keyword_trend(filtered_df)
+        render_category_trend(filtered_df)
     with c2:
-        section_title("급상승 키워드 TOP 7", "")
-        rising = rising_keywords(filtered_df)
-        if rising.empty:
-            st.info("급상승 키워드 계산 데이터가 부족합니다.")
+        section_title("카테고리 TOP 7", "")
+        ctop = category_top_table(filtered_df, limit=7)
+        if ctop.empty:
+            st.info("표시할 카테고리 데이터가 없습니다.")
         else:
-            cw = rising.attrs.get("current_week", "현재 주")
-            pw = rising.attrs.get("previous_week", "직전 주")
-            st.caption(f"현재 주: {cw} / 직전 주: {pw}")
-            render_pretty_table(rising, ["keyword", "현재 주", "직전 주", "증감"], ["키워드", "현재 주", "직전 주", "증감"])
+            render_pretty_table(ctop, ["카테고리", "기사 수", "비중"], max_rows=7)
 
     c3, c4 = st.columns([1, 1], gap="large")
     with c3:
