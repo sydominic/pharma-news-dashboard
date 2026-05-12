@@ -14,14 +14,14 @@ from .policy_links import extract_policy_articles
 
 # ---------- fonts ----------
 _FONT_REG_PATHS = [
-    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
     "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
     "/usr/share/fonts/truetype/unfonts-core/UnDotum.ttf",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
 ]
 _FONT_BOLD_PATHS = [
-    "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
     "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf",
     "/usr/share/fonts/truetype/unfonts-core/UnDotumBold.ttf",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
 ]
 
 
@@ -163,6 +163,32 @@ def _importance_articles(df: pd.DataFrame, limit: int = 3) -> pd.DataFrame:
     return work.sort_values(["_rank", "_dt"], ascending=[False, False]).head(limit)
 
 
+def _priority_articles(df: pd.DataFrame, limit: int = 3) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame()
+    work = df.copy()
+    cat_weight = {
+        "회수/처분": 5,
+        "정책/가이드라인": 4,
+        "GMP/품질": 3,
+        "해외규제": 2,
+    }
+    imp_weight = {"높음": 3, "중간": 2, "일반": 1}
+    work["_cat_rank"] = work.get("category", pd.Series(dtype=str)).map(cat_weight).fillna(0)
+    work["_imp_rank"] = work.get("importance", pd.Series(dtype=str)).map(imp_weight).fillna(1)
+    work["_dt"] = pd.to_datetime(work.get("published_at", ""), errors="coerce")
+    return work.sort_values(["_cat_rank", "_imp_rank", "_dt"], ascending=[False, False, False]).head(limit)
+
+
+def _category_concentration_text(df: pd.DataFrame) -> str:
+    top = _category_counts(df, limit=1)
+    if top.empty:
+        return "카테고리 집중도 정보가 없습니다."
+    cat = _safe(top.iloc[0]["category"])
+    ratio = float(top.iloc[0]["ratio"]) * 100
+    return f"카테고리 집중도: {cat} 비중이 {ratio:.1f}%로 가장 높습니다."
+
+
 def _summary_lines(df: pd.DataFrame) -> list[str]:
     if df is None or df.empty:
         return ["현재 조회 조건에 해당하는 기사가 없습니다."]
@@ -178,11 +204,12 @@ def _summary_lines(df: pd.DataFrame) -> list[str]:
     lines = [f"조회기간 내 총 {total:,}건의 기사가 수집 및 분류되었습니다."]
     if not top.empty:
         lines.append(f"최다 카테고리는 {top.iloc[0]['category']}이며 {int(top.iloc[0]['count'])}건입니다.")
-    if policy:
+        lines.append(_category_concentration_text(df))
+    if policy and len(lines) < 4:
         lines.append(f"정책/가이드라인성 기사 {policy}건이 감지되어 공식 게시판 확인이 권장됩니다.")
-    if recall or high:
+    if (recall or high) and len(lines) < 4:
         lines.append(f"회수/처분 {recall}건 및 중요도 높음 {high}건은 우선 검토 대상입니다.")
-    elif gmp:
+    elif gmp and len(lines) < 4:
         lines.append(f"GMP/품질 관련 기사 {gmp}건이 감지되었습니다.")
     if overseas and len(lines) < 4:
         lines.append(f"FDA/EMA 등 해외규제 관련 기사 {overseas}건이 감지되었습니다.")
@@ -338,13 +365,12 @@ def build_report_png(df: pd.DataFrame, issue_groups: list[dict] | None, start_da
             draw.line((x + 16, ay + 54, x + aw - 16, ay + 54), fill=LINE, width=1)
             ay += 92
 
-    draw_article_panel(margin, "주요 확인 기사", _importance_articles(df, limit=3))
-    draw_article_panel(margin + aw + col_gap, "정책/가이드라인 기사", extract_policy_articles(df))
+    draw_article_panel(margin, "우선 확인 필요 기사", _priority_articles(df, limit=3))
+    draw_article_panel(margin + aw + col_gap, "정책/공식자료 확인 기사", extract_policy_articles(df))
 
     # footer
-    footer = "본 리포트는 Google News RSS 모니터링 데이터를 기반으로 자동 생성되었습니다."
-    fw, _ = _text_size(f_small, footer)
-    draw.text((margin, H - 34), footer, font=f_small, fill=TEXT_SUB)
+    footer = "주의: 본 리포트는 Google News RSS 제목·요약 기반 자동 분류 결과이며, 최종 판단은 원문 및 규제기관 공식자료 확인이 필요합니다."
+    draw.text((margin, H - 34), _fit_text(footer, f_small, W - margin*2 - 120), font=f_small, fill=TEXT_SUB)
     page = "1Page Report"
     pw, _ = _text_size(f_small, page)
     draw.text((W - margin - pw, H - 34), page, font=f_small, fill=TEXT_SUB)
