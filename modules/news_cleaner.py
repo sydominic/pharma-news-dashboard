@@ -20,6 +20,11 @@ VALID_CATEGORIES = set(CATEGORY_ORDER + ["기타"])
 NULL_LIKE = {"", "nan", "none", "nat", "null", "na", "n/a"}
 LINK_CANDIDATE_COLUMNS = ["link", "url", "article_url", "google_link", "rss_link", "source_url", "article_link", "origin_link"]
 
+RETENTION_GENERAL_DAYS = 90
+RETENTION_LONG_DAYS = 1095
+LONG_RETENTION_CATEGORIES = {"정책/가이드라인", "회수/처분", "GMP/품질"}
+LONG_RETENTION_IMPORTANCE = {"높음"}
+
 
 def ensure_data_dir(path: str | Path) -> None:
     Path(path).mkdir(parents=True, exist_ok=True)
@@ -105,6 +110,80 @@ def clean_summary(value: object) -> str:
     return text[:400]
 
 
+def retention_bucket(category: object, importance: object) -> str:
+    category_text = clean_text(category)
+    importance_text = clean_text(importance)
+    if importance_text in LONG_RETENTION_IMPORTANCE or category_text in LONG_RETENTION_CATEGORIES:
+        return "long_term"
+    return "general"
+
+
+def retention_days_for_row(row: pd.Series) -> int:
+    bucket = retention_bucket(row.get("category", ""), row.get("importance", ""))
+    return RETENTION_LONG_DAYS if bucket == "long_term" else RETENTION_GENERAL_DAYS
+
+
+def apply_retention_policy(df: pd.DataFrame, as_of: pd.Timestamp | None = None) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame(columns=df.columns if df is not None else STANDARD_COLUMNS)
+    work = df.copy()
+    as_of = as_of or pd.Timestamp.now().normalize()
+    work["published_at_dt"] = pd.to_datetime(work["published_at"], errors="coerce")
+    work = work.dropna(subset=["published_at_dt"]).copy()
+    work["retention_bucket"] = work.apply(lambda r: retention_bucket(r.get("category", ""), r.get("importance", "")), axis=1)
+    work["retention_days"] = work.apply(retention_days_for_row, axis=1)
+    cutoff = work["published_at_dt"] + pd.to_timedelta(work["retention_days"], unit="D")
+    kept = work[cutoff >= as_of].copy()
+    return kept.drop(columns=["published_at_dt", "retention_bucket", "retention_days"], errors="ignore").reset_index(drop=True)
+
+
+def retention_summary(df: pd.DataFrame, as_of: pd.Timestamp | None = None) -> pd.DataFrame:
+    columns = ["보관구분", "보관기간", "기사 수"]
+    if df is None or df.empty:
+        return pd.DataFrame(columns=columns)
+    as_of = as_of or pd.Timestamp.now().normalize()
+    work = repair_and_reclassify(df, force=False).copy()
+    work["published_at_dt"] = pd.to_datetime(work["published_at"], errors="coerce")
+    work = work.dropna(subset=["published_at_dt"]).copy()
+    work["보관구분"] = work.apply(lambda r: "장기보관" if retention_bucket(r.get("category", ""), r.get("importance", "")) == "long_term" else "일반보관", axis=1)
+    work["보관기간"] = work["보관구분"].map({"일반보관": f"{RETENTION_GENERAL_DAYS}일", "장기보관": f"{RETENTION_LONG_DAYS}일"})
+    summary = work.groupby(["보관구분", "보관기간"], dropna=False).size().reset_index(name="기사 수")
+    order = {"일반보관": 1, "장기보관": 2}
+    summary["_o"] = summary["보관구분"].map(order).fillna(99)
+    return summary.sort_values(["_o", "보관기간"]).drop(columns=["_o"]).reset_index(drop=True)
+
+
+def write_retention_stats(df: pd.DataFrame, data_dir: str | Path) -> None:
+    if df is None or df.empty:
+        return
+    data_path = Path(data_dir)
+    data_path.mkdir(parents=True, exist_ok=True)
+    work = repair_and_reclassify(df, force=False).copy()
+    work["published_at_dt"] = pd.to_datetime(work["published_at"], errors="coerce")
+    work = work.dropna(subset=["published_at_dt"]).copy()
+
+    monthly = work.copy()
+    monthly["month"] = monthly["published_at_dt"].dt.to_period("M").astype(str)
+    monthly_stats = monthly.groupby(["month", "category"], dropna=False).size().reset_index(name="count")
+    monthly_stats.to_csv(data_path / "category_monthly_stats.csv", index=False, encoding="utf-8-sig")
+
+    weekly_rows = []
+    for period, group in work.groupby(work["published_at_dt"].dt.to_period("W-MON")):
+        counter = {}
+        for value in group["keywords"].fillna(""):
+            for keyword in str(value).split(","):
+                kw = keyword.strip()
+                if kw:
+                    counter[kw] = counter.get(kw, 0) + 1
+        week_start = period.start_time.date().isoformat()
+        week_end = period.end_time.date().isoformat()
+        for kw, count in sorted(counter.items(), key=lambda x: (-x[1], x[0])):
+            weekly_rows.append({"week_start": week_start, "week_end": week_end, "keyword": kw, "count": count})
+    pd.DataFrame(weekly_rows, columns=["week_start", "week_end", "keyword", "count"]).to_csv(data_path / "keyword_weekly_stats.csv", index=False, encoding="utf-8-sig")
+
+    retention_summary(work).to_csv(data_path / "retention_summary.csv", index=False, encoding="utf-8-sig")
+
+
 def normalize_bool(value: object) -> bool:
     if isinstance(value, bool):
         return value
@@ -187,14 +266,17 @@ def load_news(path: str | Path) -> pd.DataFrame:
     if not p.exists():
         return pd.DataFrame(columns=STANDARD_COLUMNS)
     df = pd.read_csv(p, encoding="utf-8-sig")
-    return repair_and_reclassify(df, force=False)
+    repaired = repair_and_reclassify(df, force=False)
+    return apply_retention_policy(repaired)
 
 
 def save_news(df: pd.DataFrame, path: str | Path) -> None:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     repaired = repair_and_reclassify(df, force=False)
-    repaired.to_csv(p, index=False, encoding="utf-8-sig")
+    retained = apply_retention_policy(repaired)
+    retained.to_csv(p, index=False, encoding="utf-8-sig")
+    write_retention_stats(retained, p.parent)
 
 
 def merge_existing(existing: pd.DataFrame, new: pd.DataFrame) -> pd.DataFrame:
@@ -219,6 +301,7 @@ def merge_existing(existing: pd.DataFrame, new: pd.DataFrame) -> pd.DataFrame:
     merged = merged.sort_values(["uid", "_has_link", "published_at_dt"], ascending=[True, False, False])
     merged = merged.drop_duplicates(subset=["uid"], keep="first")
     merged = merged.sort_values("published_at_dt", ascending=False).drop(columns=["published_at_dt", "_has_link"])
+    merged = apply_retention_policy(merged)
     return merged.reset_index(drop=True)
 
 

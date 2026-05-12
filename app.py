@@ -1,5 +1,23 @@
 from __future__ import annotations
 
+import importlib.util
+import subprocess
+import sys
+
+_REQUIRED_PACKAGES = {
+    "pandas": "pandas",
+    "plotly": "plotly",
+    "streamlit": "streamlit",
+    "feedparser": "feedparser",
+    "requests": "requests",
+    "bs4": "beautifulsoup4",
+    "openpyxl": "openpyxl",
+    "dateutil": "python-dateutil",
+}
+_missing = [pip_name for import_name, pip_name in _REQUIRED_PACKAGES.items() if importlib.util.find_spec(import_name) is None]
+if _missing:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", *_missing])
+
 from collections import Counter
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -12,11 +30,14 @@ import streamlit as st
 from modules.classifier import CATEGORY_ORDER, category_palette
 from modules.news_cleaner import (
     STANDARD_COLUMNS,
+    RETENTION_GENERAL_DAYS,
+    RETENTION_LONG_DAYS,
     filter_news,
     load_news,
     merge_existing,
     normalize_and_classify,
     repair_and_reclassify,
+    retention_summary,
     sample_news,
     save_news,
     to_excel_bytes,
@@ -30,43 +51,12 @@ DATA_DIR = BASE_DIR / "data"
 CONFIG_PATH = DATA_DIR / "rss_sources.json"
 RAW_PATH = DATA_DIR / "news_raw.csv"
 CLEAN_PATH = DATA_DIR / "news_clean.csv"
-APP_VERSION = "v1.12-online"
+APP_VERSION = "v1.13"
 
 st.set_page_config(page_title="제약뉴스 RSS 대시보드", page_icon="📰", layout="wide", initial_sidebar_state="collapsed")
 inject_css()
 
 IMPORTANCE_ORDER = {"높음": 3, "중간": 2, "일반": 1}
-
-
-def _read_app_password() -> str:
-    """Streamlit Cloud secrets에서 APP_PASSWORD를 읽습니다. 값이 없으면 공개 모드로 실행합니다."""
-    try:
-        value = st.secrets.get("APP_PASSWORD", "")
-    except Exception:
-        value = ""
-    return str(value or "").strip()
-
-
-def require_password_if_configured() -> None:
-    """APP_PASSWORD가 설정된 경우에만 간단한 접속 비밀번호를 요구합니다."""
-    app_password = _read_app_password()
-    if not app_password:
-        return
-    if st.session_state.get("pharma_news_auth_ok"):
-        return
-
-    header("제약뉴스 RSS 대시보드", "온라인 접속 보호가 설정되어 있습니다.")
-    st.info("관리자가 설정한 접속 비밀번호를 입력해 주세요.")
-    with st.form("password_form"):
-        entered = st.text_input("비밀번호", type="password")
-        submitted = st.form_submit_button("접속")
-    if submitted:
-        if entered == app_password:
-            st.session_state["pharma_news_auth_ok"] = True
-            st.rerun()
-        else:
-            st.error("비밀번호가 맞지 않습니다.")
-    st.stop()
 
 
 KEYWORD_EXCLUDE_EXACT = {
@@ -504,9 +494,6 @@ def render_policy_card(row: pd.Series) -> None:
     st.markdown(html, unsafe_allow_html=True)
 
 
-# 온라인 접속 보호: Streamlit secrets에 APP_PASSWORD가 있을 때만 동작
-require_password_if_configured()
-
 # 데이터 로드
 all_df = prepare_display_df(load_or_collect_initial())
 
@@ -543,7 +530,7 @@ with st.container(border=True):
     with c6:
         max_items = st.selectbox("쿼리당 수집", [50, 80, 100], index=1, format_func=lambda x: f"{x}건/식", label_visibility="collapsed")
 
-    b1, b2, b3, b4 = st.columns([1.25, 1.0, 1.0, 3.2])
+    b1, b2, b3, b4, b5 = st.columns([1.25, 1.0, 1.0, 1.0, 2.8])
     with b1:
         collect_clicked = st.button(f"🛰️ RSS 수집", type="primary", use_container_width=True)
     with b2:
@@ -551,7 +538,9 @@ with st.container(border=True):
     with b3:
         render_collect_scope_popover()
     with b4:
-        st.caption(f"데이터 상태: {source_status()} · 원문은 Google News RSS 링크를 통해 열립니다.")
+        render_retention_policy_popover(all_df)
+    with b5:
+        st.caption(f"데이터 상태: {source_status()} · 보관정책 적용 중 · 원문은 Google News RSS 링크를 통해 열립니다.")
 
 if isinstance(selected_range, tuple) and len(selected_range) == 2:
     start_date, end_date = selected_range

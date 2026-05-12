@@ -1,7 +1,22 @@
 from __future__ import annotations
 
+import importlib.util
+import subprocess
+import sys
 from datetime import date, timedelta
 from pathlib import Path
+
+_REQUIRED_PACKAGES = {
+    "pandas": "pandas",
+    "feedparser": "feedparser",
+    "requests": "requests",
+    "bs4": "beautifulsoup4",
+    "openpyxl": "openpyxl",
+    "dateutil": "python-dateutil",
+}
+_missing = [pip_name for import_name, pip_name in _REQUIRED_PACKAGES.items() if importlib.util.find_spec(import_name) is None]
+if _missing:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", *_missing])
 
 from modules.news_cleaner import load_news, merge_existing, normalize_and_classify, save_news
 from modules.rss_collector import collect_google_news
@@ -33,9 +48,12 @@ def main() -> None:
     merged = merge_existing(existing, clean)
     print(f"      Existing: {len(existing)} / Merged: {len(merged)}")
 
-    print("[4/4] Save")
+    print("[4/4] Save with retention policy")
     save_news(merged, CLEAN_PATH)
     print(f"Saved: {CLEAN_PATH}")
+    print(f"Stats: {DATA_DIR / 'category_monthly_stats.csv'}")
+    print(f"Stats: {DATA_DIR / 'keyword_weekly_stats.csv'}")
+    print(f"Stats: {DATA_DIR / 'retention_summary.csv'}")
     if errors:
         print("\n[WARN] Some queries failed:")
         for err in errors:
