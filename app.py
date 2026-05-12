@@ -32,7 +32,7 @@ DATA_DIR = BASE_DIR / "data"
 CONFIG_PATH = DATA_DIR / "rss_sources.json"
 RAW_PATH = DATA_DIR / "news_raw.csv"
 CLEAN_PATH = DATA_DIR / "news_clean.csv"
-APP_VERSION = "v1.24"
+APP_VERSION = "v1.25"
 
 st.set_page_config(page_title="제약뉴스 RSS 대시보드", page_icon="📰", layout="wide", initial_sidebar_state="collapsed")
 inject_css()
@@ -808,8 +808,38 @@ with tab_news:
     if filtered_df.empty:
         st.info("표시할 뉴스가 없습니다.")
     else:
-        max_timeline_items = st.slider("타임라인 표시 건수", 10, 100, 40, 10)
-        for day, day_df in filtered_df.head(max_timeline_items).groupby("date", sort=False):
+        total_news = len(filtered_df)
+        pg1, pg2, pg3, pg4 = st.columns([1.15, 1.0, 1.0, 3.0])
+        with pg1:
+            page_size = st.selectbox("페이지당 표시", [25, 50, 100], index=1, format_func=lambda x: f"{x}건", key="news_page_size")
+        total_pages = max((total_news + int(page_size) - 1) // int(page_size), 1)
+        current_page = int(st.session_state.get("news_current_page", 1))
+        if current_page > total_pages:
+            current_page = total_pages
+        if current_page < 1:
+            current_page = 1
+        st.session_state["news_current_page"] = current_page
+        with pg2:
+            if st.button("◀ 이전", use_container_width=True, disabled=current_page <= 1):
+                st.session_state["news_current_page"] = max(current_page - 1, 1)
+                st.rerun()
+        with pg3:
+            if st.button("다음 ▶", use_container_width=True, disabled=current_page >= total_pages):
+                st.session_state["news_current_page"] = min(current_page + 1, total_pages)
+                st.rerun()
+        with pg4:
+            selected_page = st.number_input("페이지", min_value=1, max_value=total_pages, value=current_page, step=1, label_visibility="collapsed")
+            if int(selected_page) != current_page:
+                st.session_state["news_current_page"] = int(selected_page)
+                st.rerun()
+
+        current_page = int(st.session_state.get("news_current_page", 1))
+        start_idx = (current_page - 1) * int(page_size)
+        end_idx = min(start_idx + int(page_size), total_news)
+        page_df = filtered_df.iloc[start_idx:end_idx]
+        st.caption(f"총 {total_news:,}건 · {total_pages:,}페이지 · 현재 {current_page:,}/{total_pages:,}페이지 · 표시 {start_idx + 1:,}~{end_idx:,}건")
+
+        for day, day_df in page_df.groupby("date", sort=False):
             st.markdown(f"#### {day}")
             for _, row in day_df.iterrows():
                 timeline_item(row)
