@@ -51,7 +51,7 @@ DATA_DIR = BASE_DIR / "data"
 CONFIG_PATH = DATA_DIR / "rss_sources.json"
 RAW_PATH = DATA_DIR / "news_raw.csv"
 CLEAN_PATH = DATA_DIR / "news_clean.csv"
-APP_VERSION = "v1.13"
+APP_VERSION = "v1.13.1"
 
 st.set_page_config(page_title="제약뉴스 RSS 대시보드", page_icon="📰", layout="wide", initial_sidebar_state="collapsed")
 inject_css()
@@ -484,6 +484,32 @@ def render_collect_scope_popover() -> None:
         with st.expander("ⓘ 수집범위"):
             st.markdown("v1.4부터 after/before 날짜 검색식을 붙여 날짜 기준으로 수집합니다.")
 
+
+
+def render_retention_policy_popover(all_data: pd.DataFrame) -> None:
+    """보관정책 안내 및 현재 보관 현황 표시."""
+    summary = retention_summary(all_data)
+    policy_text = f"""
+    - **일반 기사**: 최근 **{RETENTION_GENERAL_DAYS}일** 유지
+    - **장기보관 기사**: 최근 **{RETENTION_LONG_DAYS}일** 유지
+    - **장기보관 대상**: 중요도 높음, 정책/가이드라인, 회수/처분, GMP/품질 기사
+    - 수집/저장 시 오래된 일반 기사는 자동 정리됩니다.
+    - 통계 파일은 `category_monthly_stats.csv`, `keyword_weekly_stats.csv`, `retention_summary.csv`로 별도 생성됩니다.
+    """
+    if hasattr(st, "popover"):
+        with st.popover("ⓘ 보관정책", use_container_width=True):
+            st.markdown(policy_text)
+            if summary.empty:
+                st.info("표시할 보관 현황이 없습니다.")
+            else:
+                render_pretty_table(summary, ["보관구분", "보관기간", "기사 수"], max_rows=10)
+    else:
+        with st.expander("ⓘ 보관정책"):
+            st.markdown(policy_text)
+            if summary.empty:
+                st.info("표시할 보관 현황이 없습니다.")
+            else:
+                render_pretty_table(summary, ["보관구분", "보관기간", "기사 수"], max_rows=10)
 
 def render_policy_card(row: pd.Series) -> None:
     source = esc(row.get("source", ""))
