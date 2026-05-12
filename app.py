@@ -32,7 +32,7 @@ DATA_DIR = BASE_DIR / "data"
 CONFIG_PATH = DATA_DIR / "rss_sources.json"
 RAW_PATH = DATA_DIR / "news_raw.csv"
 CLEAN_PATH = DATA_DIR / "news_clean.csv"
-APP_VERSION = "v1.23"
+APP_VERSION = "v1.24"
 
 st.set_page_config(page_title="제약뉴스 RSS 대시보드", page_icon="📰", layout="wide", initial_sidebar_state="collapsed")
 inject_css()
@@ -684,7 +684,7 @@ else:
 
 with st.container(border=True):
     st.markdown("<div class='compact-filter-title'>조회조건</div>", unsafe_allow_html=True)
-    c1, c2, c3, c4, c5, c6 = st.columns([1.35, 1.15, 1.15, 1.7, 1.0, 1.0])
+    c1, c2, c3, c4, c5, c6, c7 = st.columns([1.28, 1.05, 1.05, 0.95, 1.55, 0.95, 0.95])
     with c1:
         selected_range = st.date_input("조회기간", value=(default_start, max_date), min_value=min_date, max_value=max(max_date, date.today()), label_visibility="collapsed")
     with c2:
@@ -694,10 +694,13 @@ with st.container(border=True):
         source_options = ["전체"] + sorted([x for x in all_df["source"].dropna().unique().tolist() if x])
         selected_sources = st.multiselect("언론사", source_options, default=["전체"], label_visibility="collapsed")
     with c4:
-        search_keyword = st.text_input("검색어", placeholder="제목, 키워드, 언론사 검색", label_visibility="collapsed")
+        importance_options = ["전체", "높음", "중간", "일반"]
+        selected_importance = st.multiselect("중요도", importance_options, default=["전체"], label_visibility="collapsed")
     with c5:
-        collect_days = st.selectbox("RSS 수집기간", [1, 3, 7, 14, 30, 90], index=2, format_func=lambda x: f"최근 {x}일", label_visibility="collapsed")
+        search_keyword = st.text_input("검색어", placeholder="제목, 키워드, 언론사 검색", label_visibility="collapsed")
     with c6:
+        collect_days = st.selectbox("RSS 수집기간", [1, 3, 7, 14, 30, 90], index=2, format_func=lambda x: f"최근 {x}일", label_visibility="collapsed")
+    with c7:
         max_items = st.selectbox("쿼리당 수집", [50, 80, 100], index=2, format_func=lambda x: f"{x}건/식", label_visibility="collapsed")
 
     b1, b2, b3, b4 = st.columns([1.25, 1.0, 1.0, 3.2])
@@ -730,7 +733,7 @@ if collect_clicked:
     except Exception as exc:
         st.error(f"수집 실패: {exc}")
 
-filtered_df = filter_news(all_df, start_date, end_date, selected_categories, selected_sources, search_keyword)
+filtered_df = filter_news(all_df, start_date, end_date, selected_categories, selected_sources, search_keyword, selected_importance)
 filtered_df = prepare_display_df(filtered_df)
 
 render_link_diagnostics(all_df, filtered_df)

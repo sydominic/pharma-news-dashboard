@@ -258,7 +258,7 @@ def merge_existing(existing: pd.DataFrame, new: pd.DataFrame) -> pd.DataFrame:
     return merged.reset_index(drop=True)
 
 
-def filter_news(df: pd.DataFrame, start_date, end_date, categories: Iterable[str], sources: Iterable[str], keyword: str) -> pd.DataFrame:
+def filter_news(df: pd.DataFrame, start_date, end_date, categories: Iterable[str], sources: Iterable[str], keyword: str, importances: Iterable[str] | None = None) -> pd.DataFrame:
     if df is None or df.empty:
         return make_empty_frame()
     work = repair_and_reclassify(df, force=False)
@@ -276,6 +276,10 @@ def filter_news(df: pd.DataFrame, start_date, end_date, categories: Iterable[str
     sources = [x for x in sources if x and x != "전체"]
     if sources:
         work = work[work["source"].isin(sources)]
+
+    importances = [x for x in (importances or []) if x and x != "전체"]
+    if importances:
+        work = work[work["importance"].isin(importances)]
 
     keyword = (keyword or "").strip().lower()
     if keyword:
