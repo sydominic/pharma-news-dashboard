@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections import Counter
+from difflib import SequenceMatcher
+import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import List, Tuple
@@ -30,7 +32,7 @@ DATA_DIR = BASE_DIR / "data"
 CONFIG_PATH = DATA_DIR / "rss_sources.json"
 RAW_PATH = DATA_DIR / "news_raw.csv"
 CLEAN_PATH = DATA_DIR / "news_clean.csv"
-APP_VERSION = "v1.14-stable"
+APP_VERSION = "v1.16"
 
 st.set_page_config(page_title="제약뉴스 RSS 대시보드", page_icon="📰", layout="wide", initial_sidebar_state="collapsed")
 inject_css()
@@ -261,6 +263,181 @@ def category_top_table(df: pd.DataFrame, limit: int = 7) -> pd.DataFrame:
     out = counts.sort_values("count", ascending=False).head(limit).copy()
     out["ratio"] = out["count"].apply(lambda x: f"{(x / total * 100):.1f}%" if total else "0.0%")
     return out.rename(columns={"category": "카테고리", "count": "기사 수", "ratio": "비중"})
+
+
+def generate_issue_summary(df: pd.DataFrame) -> List[str]:
+    if df is None or df.empty:
+        return ["현재 조회 조건에 해당하는 기사가 없습니다."]
+    total = len(df)
+    high = int((df["importance"] == "높음").sum()) if "importance" in df.columns else 0
+    policy = int((df["category"] == "정책/가이드라인").sum()) if "category" in df.columns else 0
+    recall = int((df["category"] == "회수/처분").sum()) if "category" in df.columns else 0
+    gmp = int((df["category"] == "GMP/품질").sum()) if "category" in df.columns else 0
+    overseas = int((df["category"] == "해외규제").sum()) if "category" in df.columns else 0
+    top_cat = category_top_table(df, limit=1)
+    lines = [f"현재 조회 조건 기준 총 {total:,}건의 기사가 수집·분류되었습니다."]
+    if not top_cat.empty:
+        lines.append(f"가장 많이 감지된 카테고리는 {top_cat.iloc[0]['카테고리']}이며, {top_cat.iloc[0]['기사 수']}건({top_cat.iloc[0]['비중']})입니다.")
+    if high:
+        lines.append(f"중요도 높음 기사가 {high}건 있습니다. 회수·처분, 품질위험 또는 안전성 관련 신호를 우선 확인하는 것이 좋습니다.")
+    if policy:
+        lines.append(f"정책/가이드라인성 기사가 {policy}건 감지되었습니다. 5탭의 규제기관 정책에서 원문과 공식 게시판을 함께 확인할 수 있습니다.")
+    if recall:
+        lines.append(f"회수/처분 관련 기사가 {recall}건 있습니다. 제조번호, 사유, 조치 범위 확인이 필요할 수 있습니다.")
+    if gmp:
+        lines.append(f"GMP/품질 관련 기사가 {gmp}건 있습니다. 실태조사, 데이터완전성, 제조·품질관리 이슈 여부를 확인하십시오.")
+    if overseas:
+        lines.append(f"해외규제 관련 기사가 {overseas}건 있습니다. FDA, EMA 등 해외 규제 변화 여부를 확인하십시오.")
+    return lines[:6]
+
+
+ISSUE_STOPWORDS = {
+    "제약", "바이오", "의약품", "신약", "국내", "글로벌", "관련", "발표", "공개", "추진", "강화", "확대", "시장",
+    "기준", "개선", "방안", "위한", "대한", "이번", "업계", "기업", "기술", "플랫폼", "치료제", "헬스케어",
+    "뉴스", "포커스", "단독", "인터뷰", "기자", "종합", "속보", "개최", "참여", "지원", "선정", "성과",
+}
+
+
+def clean_issue_title(title: object) -> str:
+    txt = str(title or "")
+    txt = re.sub(r"\[[^\]]+\]", " ", txt)
+    txt = re.sub(r"\([^\)]*\)", " ", txt)
+    txt = re.sub(r"\s+-\s+[^-]{2,30}$", " ", txt)
+    txt = re.sub(r"[\"'‘’“”…·,.:;!?/\\|]+", " ", txt)
+    txt = re.sub(r"\s+", " ", txt).strip()
+    return txt
+
+
+def issue_tokens(title: object) -> set[str]:
+    txt = clean_issue_title(title)
+    tokens = re.findall(r"[가-힣A-Za-z0-9]{2,}", txt)
+    out = []
+    for token in tokens:
+        t = token.strip()
+        if len(t) < 2:
+            continue
+        if t in ISSUE_STOPWORDS:
+            continue
+        if re.fullmatch(r"\d+", t):
+            continue
+        out.append(t)
+    return set(out[:12])
+
+
+def issue_similarity(a_title: object, b_title: object) -> float:
+    a_tokens = issue_tokens(a_title)
+    b_tokens = issue_tokens(b_title)
+    if not a_tokens or not b_tokens:
+        return 0.0
+    overlap = len(a_tokens & b_tokens) / max(min(len(a_tokens), len(b_tokens)), 1)
+    text_sim = SequenceMatcher(None, clean_issue_title(a_title), clean_issue_title(b_title)).ratio()
+    return max(overlap, text_sim * 0.8)
+
+
+def group_similar_issues(df: pd.DataFrame, max_groups: int = 8, threshold: float = 0.46) -> list[dict]:
+    if df is None or df.empty:
+        return []
+    work = importance_articles(df).head(160).copy()
+    groups: list[dict] = []
+    for _, row in work.iterrows():
+        title = str(row.get("title", ""))
+        category = str(row.get("category", ""))
+        if not title:
+            continue
+        placed = False
+        for group in groups:
+            if category != group["category"]:
+                continue
+            sim = issue_similarity(title, group["representative_title"])
+            if sim >= threshold:
+                group["rows"].append(row)
+                group["sources"].add(str(row.get("source", "")))
+                placed = True
+                break
+        if not placed:
+            groups.append({
+                "representative_title": title,
+                "category": category,
+                "rows": [row],
+                "sources": {str(row.get("source", ""))},
+            })
+    groups = [g for g in groups if len(g["rows"]) >= 2]
+    groups.sort(key=lambda g: (len(g["rows"]), len(g["sources"])), reverse=True)
+    return groups[:max_groups]
+
+
+def render_issue_groups(groups: list[dict]) -> None:
+    if not groups:
+        st.info("현재 조회 조건에서는 유사 이슈로 묶을 수 있는 기사가 충분하지 않습니다.")
+        return
+    html_parts = ["<div class='issue-group-wrap'>"]
+    for group in groups:
+        rows = group["rows"][:5]
+        sources = sorted([s for s in group["sources"] if s])
+        rep = rows[0]
+        source_txt = ", ".join(sources[:5])
+        html_parts.append("<div class='issue-group-card'>")
+        html_parts.append(f"<div class='issue-group-head'><b>{esc(group['representative_title'])}</b><span>{len(group['rows'])}건 · {esc(group['category'])}</span></div>")
+        html_parts.append(f"<div class='issue-group-meta'>언론사: {esc(source_txt) if source_txt else '확인 없음'}</div>")
+        html_parts.append("<ul class='issue-list'>")
+        for r in rows:
+            title = esc(r.get("title", ""))
+            source = esc(r.get("source", ""))
+            link = esc(r.get("link", ""))
+            if link:
+                html_parts.append(f"<li><span>{source}</span> <a href='{link}' target='_blank' rel='noopener noreferrer'>{title} ↗</a></li>")
+            else:
+                html_parts.append(f"<li><span>{source}</span> {title}</li>")
+        html_parts.append("</ul></div>")
+    html_parts.append("</div>")
+    st.markdown("".join(html_parts), unsafe_allow_html=True)
+
+
+def build_weekly_report(df: pd.DataFrame, issue_groups: list[dict], start_date, end_date) -> bytes:
+    lines = []
+    lines.append("# 제약뉴스 주간 모니터링 리포트")
+    lines.append("")
+    lines.append(f"- 생성일시: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    lines.append(f"- 조회기간: {start_date} ~ {end_date}")
+    lines.append(f"- 전체 기사 수: {len(df):,}건")
+    lines.append("")
+    lines.append("## 1. 중요 이슈 요약")
+    for line in generate_issue_summary(df):
+        lines.append(f"- {line}")
+    lines.append("")
+    lines.append("## 2. 카테고리 TOP 7")
+    ctop = category_top_table(df, limit=7)
+    if ctop.empty:
+        lines.append("- 표시할 카테고리 데이터가 없습니다.")
+    else:
+        for _, row in ctop.iterrows():
+            lines.append(f"- {row['카테고리']}: {row['기사 수']}건 ({row['비중']})")
+    lines.append("")
+    lines.append("## 3. 유사 이슈 묶음")
+    if not issue_groups:
+        lines.append("- 유사 이슈로 묶인 기사가 없습니다.")
+    else:
+        for idx, group in enumerate(issue_groups, start=1):
+            sources = ", ".join(sorted([s for s in group['sources'] if s]))
+            lines.append(f"### {idx}. {group['representative_title']}")
+            lines.append(f"- 카테고리: {group['category']}")
+            lines.append(f"- 기사 수: {len(group['rows'])}건")
+            lines.append(f"- 언론사: {sources}")
+            for r in group['rows'][:5]:
+                lines.append(f"  - {r.get('source','')}: {r.get('title','')} ({r.get('link','')})")
+            lines.append("")
+    lines.append("## 4. 주요 기사")
+    for _, row in importance_articles(df).head(10).iterrows():
+        lines.append(f"- [{row.get('category','')}/{row.get('importance','')}] {row.get('source','')} - {row.get('title','')} ({row.get('link','')})")
+    lines.append("")
+    lines.append("## 5. 정책/가이드라인 기사")
+    policy_df = extract_policy_articles(df)
+    if policy_df.empty:
+        lines.append("- 정책/가이드라인성 기사가 감지되지 않았습니다.")
+    else:
+        for _, row in policy_df.head(10).iterrows():
+            lines.append(f"- {row.get('source','')} - {row.get('title','')} ({row.get('link','')})")
+    return "\n".join(lines).encode("utf-8-sig")
 
 
 def category_keyword_summary(df: pd.DataFrame) -> pd.DataFrame:
@@ -556,13 +733,25 @@ filtered_df = prepare_display_df(filtered_df)
 render_link_diagnostics(all_df, filtered_df)
 
 excel_bytes = to_excel_bytes(filtered_df)
-st.download_button(
-    "📥 현재 조회 결과 엑셀 다운로드",
-    data=excel_bytes,
-    file_name=f"pharma_news_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    use_container_width=False,
-)
+issue_groups_cache = group_similar_issues(filtered_df, max_groups=8)
+
+dl1, dl2 = st.columns([1.0, 1.15])
+with dl1:
+    st.download_button(
+        "📥 현재 조회 결과 엑셀 다운로드",
+        data=excel_bytes,
+        file_name=f"pharma_news_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+    )
+with dl2:
+    st.download_button(
+        "🧾 주간 리포트 다운로드",
+        data=build_weekly_report(filtered_df, issue_groups_cache, start_date, end_date),
+        file_name=f"pharma_news_weekly_report_{datetime.now().strftime('%Y%m%d_%H%M')}.md",
+        mime="text/markdown",
+        use_container_width=True,
+    )
 
 if filtered_df.empty:
     st.warning("현재 필터 조건에 해당하는 기사가 없습니다. 기간 또는 검색어를 조정하거나 RSS 수집을 실행해 주세요.")
@@ -600,6 +789,10 @@ with tab_dashboard:
     with k5:
         kpi_card("주요 키워드", f"{keyword_count:,}개", f"카테고리 {category_count}개")
 
+    section_title("중요 이슈 요약", "")
+    summary_lines = generate_issue_summary(filtered_df)
+    st.markdown("<div class='issue-summary'>" + "".join([f"<div>• {esc(line)}</div>" for line in summary_lines]) + "</div>", unsafe_allow_html=True)
+
     left, right = st.columns([1.35, 0.9], gap="large")
     with left:
         section_title("주요 뉴스", "", compact=True)
@@ -610,6 +803,9 @@ with tab_dashboard:
         section_title("카테고리 분포", "")
         render_category_pie(filtered_df, title="카테고리 분포")
         render_pretty_table(category_ratio_table(filtered_df), ["카테고리", "기사 수", "비중"], max_rows=10)
+
+    section_title("유사 이슈 묶음", "같은 이슈로 보이는 반복 보도")
+    render_issue_groups(issue_groups_cache)
 
 with tab_news:
     st.subheader("📰 뉴스목록")

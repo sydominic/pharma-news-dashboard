@@ -75,12 +75,24 @@ def inject_css() -> None:
         .pretty-table tbody tr:nth-child(even) td { background:#fbfdff; }
         .pretty-table tbody tr:hover td { background:#f4f9ff; }
         .pretty-table tbody tr:last-child td { border-bottom:0; }
+        .issue-summary { background:linear-gradient(135deg,#f8fbff,#eef6ff); border:1px solid #d7e7fb; border-left:6px solid #0065d8; border-radius:20px; padding:18px 20px; margin:6px 0 18px; box-shadow:0 10px 22px rgba(8,31,63,0.05); color:#0b213d; font-size:15px; font-weight:700; line-height:1.75; }
+        .issue-group-wrap { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; margin:4px 0 18px; }
+        .issue-group-card { background:#fff; border:1px solid #dce7f4; border-radius:20px; padding:17px 18px; box-shadow:0 8px 18px rgba(8,31,63,0.045); }
+        .issue-group-head { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; margin-bottom:8px; }
+        .issue-group-head b { color:#0b213d; font-size:16px; line-height:1.45; font-weight:900; }
+        .issue-group-head span { flex:0 0 auto; border-radius:999px; padding:5px 10px; background:#eef6ff; color:#0065d8; font-size:12px; font-weight:900; }
+        .issue-group-meta { color:#64748b; font-size:12px; font-weight:700; margin-bottom:8px; }
+        .issue-list { margin:8px 0 0 0; padding-left:18px; color:#1f334a; }
+        .issue-list li { margin-bottom:7px; line-height:1.5; font-size:13px; }
+        .issue-list li span { color:#0065d8; font-weight:900; margin-right:4px; }
+        .issue-list a { color:#0b213d !important; text-decoration:none; font-weight:800; }
+        .issue-list a:hover { color:#0065d8 !important; text-decoration:underline; }
         .policy-board-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin-top:8px; }
         .board-link-card { display:flex; align-items:center; gap:10px; min-height:64px; padding:14px 16px; border:1px solid #dce7f4; border-radius:17px; background:linear-gradient(135deg,#ffffff,#f5f9ff); text-decoration:none !important; box-shadow:0 8px 18px rgba(8,31,63,0.045); }
         .board-link-card span { display:inline-grid; place-items:center; width:28px; height:28px; border-radius:10px; background:#eaf3ff; color:#0065d8; font-weight:900; }
         .board-link-card b { color:#081f3f; font-size:14px; }
         .board-link-card:hover { border-color:#9fc3ee; transform:translateY(-1px); }
-        @media (max-width:1100px) { .kanban-wrap { grid-template-columns:repeat(2,minmax(0,1fr)); } .policy-board-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+        @media (max-width:1100px) { .kanban-wrap { grid-template-columns:repeat(2,minmax(0,1fr)); } .policy-board-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .issue-group-wrap { grid-template-columns:1fr; } }
         @media (max-width:760px) { .kanban-wrap { grid-template-columns:1fr; } .policy-board-grid { grid-template-columns:1fr; } .timeline-row { grid-template-columns:64px 18px minmax(0,1fr); } .hanall-header::after { display:none; } .stTabs [data-baseweb="tab"] { font-size:14px; padding:0 9px; } }
         </style>
         """,
