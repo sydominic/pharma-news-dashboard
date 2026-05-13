@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import re
 from typing import Tuple
+from difflib import SequenceMatcher
 from urllib.parse import urlparse
 
 import requests
@@ -141,17 +142,52 @@ def sentence_score(sentence: str, title: str = "") -> int:
     return score
 
 
+def _canonical_for_compare(text: str) -> str:
+    text = normalize_text(text).lower()
+    text = re.sub(r"\s+-\s+[^-]{2,40}$", " ", text)
+    text = re.sub(r"[\[\]().,·'\"“”‘’|:/\\]+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def _rss_summary_is_substantive(title: str, rss_summary: str) -> bool:
+    t = _canonical_for_compare(title)
+    s = _canonical_for_compare(rss_summary)
+    if not s or len(s) < 90:
+        return False
+    if t and (t in s or s in t or SequenceMatcher(None, t, s).ratio() >= 0.82):
+        return False
+    # 언론사명/제목만 반복되는 RSS description 방지
+    meaningful_terms = ["때문", "따라", "밝혔", "예정", "주요", "내용", "대상", "기준", "조치", "개정", "공개", "발표", "회수", "처분", "허가", "임상", "품질", "규제"]
+    return any(term in rss_summary for term in meaningful_terms)
+
+
+def _summary_unavailable_message(body_status: str = "") -> str:
+    status = normalize_text(body_status) or "본문수집제한"
+    return "\n".join([
+        "- 원문 본문을 충분히 수집하지 못해 3~5줄 요약을 생성하지 않았습니다.",
+        f"- 수집상태: {status}",
+        "- 원문 열기를 눌러 기사 본문을 직접 확인해 주세요.",
+    ])
+
 def summarize_article(title: str, rss_summary: str = "", article_text: str = "", max_lines: int = 4) -> str:
     title = normalize_text(title, max_chars=220)
-    rss_summary = normalize_text(rss_summary, max_chars=600)
+    rss_summary = normalize_text(rss_summary, max_chars=1200)
     article_text = normalize_text(article_text, max_chars=5000)
 
-    base_text = " ".join([rss_summary, article_text]).strip()
+    has_body = len(article_text) >= 160
+    has_useful_rss = _rss_summary_is_substantive(title, rss_summary)
+    if not has_body and not has_useful_rss:
+        return _summary_unavailable_message("본문수집제한/RSS요약부족")
+
+    base_text = article_text if has_body else rss_summary
     sentences = split_sentences(base_text)
     selected: list[str] = []
     for sentence in sorted(sentences, key=lambda s: sentence_score(s, title), reverse=True):
-        sentence = normalize_text(sentence, max_chars=210)
+        sentence = normalize_text(sentence, max_chars=230)
         if not sentence:
+            continue
+        if title and SequenceMatcher(None, _canonical_for_compare(title), _canonical_for_compare(sentence)).ratio() >= 0.86:
             continue
         if any(sentence in prev or prev in sentence for prev in selected):
             continue
@@ -164,31 +200,34 @@ def summarize_article(title: str, rss_summary: str = "", article_text: str = "",
         order = {s: i for i, s in enumerate(sentences)}
         selected = sorted(selected, key=lambda s: order.get(s, 9999))[:max_lines]
 
-    if not selected:
-        if rss_summary:
-            selected = [rss_summary]
-        elif title:
-            selected = [title]
+    if not selected and sentences:
+        # Body/RSS exists but priority scoring failed. Use earliest non-title sentences only.
+        for sentence in sentences:
+            s = normalize_text(sentence, max_chars=230)
+            if not s:
+                continue
+            if title and SequenceMatcher(None, _canonical_for_compare(title), _canonical_for_compare(s)).ratio() >= 0.86:
+                continue
+            selected.append(s)
+            if len(selected) >= max_lines:
+                break
 
-    # For very short RSS-only items, add transparent context lines without inventing facts.
-    if len(selected) < 3:
-        if title and not any(title in s or s in title for s in selected):
-            selected.insert(0, title)
-        if article_text:
-            selected.append("원문 본문 일부를 기준으로 제목·요약보다 넓은 문맥을 반영했습니다.")
-        else:
-            selected.append("원문 본문 수집이 제한되어 RSS 제목·요약 기준으로 정리했습니다.")
+    if not selected:
+        return _summary_unavailable_message("본문수집제한/RSS요약부족")
 
     final: list[str] = []
     for s in selected:
-        s = normalize_text(s, max_chars=210).strip("-• ")
+        s = normalize_text(s, max_chars=230).strip("-• ")
         if s and s not in final:
             final.append(s)
         if len(final) >= max(3, min(max_lines, 5)):
             break
 
-    return "\n".join([f"- {line}" for line in final])
+    # 1~2줄밖에 못 뽑히면 '3~5줄 요약'이라고 오해되지 않도록 상태를 명확히 표시합니다.
+    if len(final) < 3:
+        final.append("기사 본문 확보 범위가 제한되어 핵심 문장 일부만 표시합니다.")
 
+    return "\n".join([f"- {line}" for line in final[:max_lines]])
 
 def enrich_article(title: str, rss_summary: str, link: str, fetch_body: bool = True, timeout_sec: int = 5, max_chars: int = 6000) -> dict:
     body = ""
@@ -198,6 +237,8 @@ def enrich_article(title: str, rss_summary: str, link: str, fetch_body: bool = T
         if not body:
             status = status or "RSS요약사용"
     summary = summarize_article(title, rss_summary, body, max_lines=4)
+    if not body and "수집상태: 본문수집제한/RSS요약부족" in summary:
+        summary = summary.replace("수집상태: 본문수집제한/RSS요약부족", f"수집상태: {status or '본문수집제한'}")
     return {
         "article_text": body,
         "article_summary": summary,

@@ -77,11 +77,11 @@ def extract_policy_articles(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame()
     work = df.copy()
-    mask = work.apply(lambda r: is_policy_article(r.get("title", ""), r.get("summary", ""), r.get("article_text", "")) or looks_like_official_policy_change(r), axis=1)
+    mask = work.apply(lambda r: is_policy_article(r.get("title", ""), r.get("summary", ""), r.get("article_text", ""), r.get("article_summary", "")) or looks_like_official_policy_change(r), axis=1)
     out = work[mask].copy()
     if out.empty:
         return out
-    out["policy_type"] = out.apply(lambda r: policy_type(r.get("title", ""), r.get("summary", ""), r.get("article_text", "")), axis=1)
+    out["policy_type"] = out.apply(lambda r: policy_type(r.get("title", ""), r.get("summary", ""), str(r.get("article_text", "")) + " " + str(r.get("article_summary", ""))), axis=1)
     out["official_query"] = out.apply(lambda r: clean_query(r.get("title", "")), axis=1)
     out["mfds_search"] = out["official_query"].apply(lambda q: mfds_board_links(q)["식약처 통합검색"])
     out["google_mfds_search"] = out["official_query"].apply(google_official_search_link)

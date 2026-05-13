@@ -41,7 +41,7 @@ DATA_DIR = BASE_DIR / "data"
 CONFIG_PATH = DATA_DIR / "rss_sources.json"
 RAW_PATH = DATA_DIR / "news_raw.csv"
 CLEAN_PATH = DATA_DIR / "news_clean.csv"
-APP_VERSION = "v1.34-content-summary"
+APP_VERSION = "v1.35-hybrid-rules-summary-popup"
 
 st.set_page_config(page_title="제약뉴스 RSS 대시보드", page_icon="📰", layout="wide", initial_sidebar_state="collapsed")
 inject_css()
@@ -529,6 +529,45 @@ def importance_articles(df: pd.DataFrame) -> pd.DataFrame:
     return work.sort_values(["_importance_rank", "published_at_dt"], ascending=[False, False]).drop(columns=["published_at_dt", "_importance_rank"], errors="ignore")
 
 
+def _row_tags(row: pd.Series) -> set[str]:
+    values = {str(row.get("category", "")).strip()}
+    for value in str(row.get("sub_tags", "")).split(","):
+        value = value.strip()
+        if value:
+            values.add(value)
+    return {v for v in values if v and v.lower() not in {"nan", "none", "null"}}
+
+
+def row_matches_lane(row: pd.Series, lane: str) -> bool:
+    return lane in _row_tags(row)
+
+
+def dedupe_issue_rows(df: pd.DataFrame, limit: int = 5, threshold: float = 0.56) -> pd.DataFrame:
+    """Regulatory radar should show issue diversity, not the same RSS issue repeated."""
+    if df is None or df.empty:
+        return df
+    work = importance_articles(df).copy()
+    selected = []
+    seen_links: set[str] = set()
+    seen_titles: list[str] = []
+    for _, row in work.iterrows():
+        title = str(row.get("title", ""))
+        link = str(row.get("link", "")).strip()
+        if link and link in seen_links:
+            continue
+        if any(issue_similarity(title, prev) >= threshold for prev in seen_titles):
+            continue
+        selected.append(row)
+        if link:
+            seen_links.add(link)
+        seen_titles.append(title)
+        if len(selected) >= limit:
+            break
+    if not selected:
+        return work.head(limit)
+    return pd.DataFrame(selected)
+
+
 def render_pretty_table(df: pd.DataFrame, columns: List[str], headers: List[str] | None = None, max_rows: int | None = None) -> None:
     """작은 요약표를 엑셀식 dataframe 대신 카드형 HTML 표로 표시합니다."""
     if df is None or df.empty:
@@ -603,8 +642,9 @@ def render_kanban(df: pd.DataFrame, lanes: List[str] | None = None) -> None:
         lanes = ["식약처/규제", "정책/가이드라인", "GMP/품질", "허가/임상", "해외규제", "회수/처분"]
     html_parts = ["<div class='kanban-wrap'>"]
     for lane in lanes:
-        lane_df_all = df[df["category"] == lane]
-        lane_df = importance_articles(lane_df_all).head(5)
+        lane_mask = df.apply(lambda r: row_matches_lane(r, lane), axis=1) if not df.empty else pd.Series([], dtype=bool)
+        lane_df_all = df[lane_mask].copy() if len(lane_mask) else df.iloc[0:0].copy()
+        lane_df = dedupe_issue_rows(lane_df_all, limit=5)
         html_parts.append("<div class='kanban-lane'>")
         html_parts.append(f"<div class='kanban-head'><b>{esc(lane)}</b><span class='kanban-count'>{len(lane_df_all)}건</span></div>")
         if lane_df.empty:
@@ -959,7 +999,11 @@ elif active_tab == "radar":
     st.caption("허가/심사, 회수/처분, GMP 품질위험, 공식 정책/가이드라인, 해외 규제기관 업데이트 중심으로 표시합니다.")
     default_lanes = ["식약처/규제", "정책/가이드라인", "GMP/품질", "허가/임상", "해외규제", "회수/처분"]
     radar_filter = st.multiselect("레이더 표시 카테고리", default_lanes + ["약가/보험", "산업/경영"], default=default_lanes)
-    radar_df = filtered_df[filtered_df["category"].isin(radar_filter)] if radar_filter else filtered_df
+    if radar_filter:
+        radar_mask = filtered_df.apply(lambda r: any(row_matches_lane(r, lane) for lane in radar_filter), axis=1)
+        radar_df = filtered_df[radar_mask]
+    else:
+        radar_df = filtered_df
     render_kanban(radar_df, lanes=radar_filter)
 
 elif active_tab == "policy":

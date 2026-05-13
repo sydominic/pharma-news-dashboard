@@ -3,22 +3,22 @@ from __future__ import annotations
 import re
 from typing import Dict, List, Tuple
 
-# v1.34/v28: content-aware unified classification.
-# Classification now uses title + RSS summary + fetched article body/article summary + source/query when available.
-# All dashboard categories are scored by one engine, then converted to multi-tags + one representative category.
+# v1.35/v29: hybrid rule-first classification.
+# v28's pure score-first representative category caused unstable results in hard categories.
+# This version uses explicit hard rules for event/policy/clinical/regulatory signals and uses scores only as a secondary tie-breaker.
 
 MFDS_TERMS = [
     "식약처", "식품의약품안전처", "MFDS", "의약품안전나라", "마약류통합관리시스템",
 ]
 OVERSEAS_REGULATORS = [
-    "FDA", "USFDA", "미 FDA", "미국 FDA", "미국 식품의약국", "식품의약국",
-    "EMA", "유럽의약품청", "유럽 의약품청", "European Medicines Agency",
+    "FDA", "USFDA", "미 FDA", "미국 FDA", "미 식품의약국", "미국 식품의약국", "미국식품의약국", "식품의약국",
+    "EMA", "유럽의약품청", "유럽 의약품청", "유럽 의약품 관리청", "European Medicines Agency",
     "European Commission", "유럽 집행위", "EU 집행위", "EC", "EudraLex",
     "PIC/S", "PICS", "PICs", "의약품실사상호협력기구",
     "ICH", "국제의약품규제조화위원회",
     "PMDA", "일본 PMDA", "일본 의약품의료기기종합기구",
     "EDQM", "유럽의약품품질위원회", "Ph. Eur", "Ph.Eur",
-    "WHO", "세계보건기구", "CHMP", "MHRA", "영국 의약품규제청", "Health Canada", "캐나다 보건부", "TGA",
+    "WHO", "세계보건기구", "CHMP", "MHRA", "영국 의약품규제청", "영국 의약품건강관리제품규제청", "Health Canada", "캐나다 보건부", "TGA", "호주 의약품청",
 ]
 DOMESTIC_REGULATORS = MFDS_TERMS + ["보건복지부", "복지부", "심평원", "건강보험심사평가원", "질병관리청"]
 REGULATOR_KEYWORDS = DOMESTIC_REGULATORS + OVERSEAS_REGULATORS
@@ -41,6 +41,15 @@ POLICY_GUIDE_KEYWORDS = POLICY_ACTION_KEYWORDS + POLICY_CHANGE_KEYWORDS
 RECALL_KEYWORDS = [
     "회수", "회수·폐기", "회수폐기", "폐기", "리콜", "recall", "행정처분", "판매중지", "판매 중지",
     "품목취소", "허가취소", "영업정지", "잠정 중지", "잠정중지", "사용중지", "처분", "수입중지", "수입 중지",
+]
+
+# 대표분류/규제레이더의 회수·처분은 반드시 사건형 단어가 있어야 합니다.
+# 품질부적합·불순물 같은 위험 단어만으로 회수/처분에 넣으면 레이더가 흔들립니다.
+STRICT_RECALL_EVENT_KEYWORDS = [
+    "회수", "회수·폐기", "회수폐기", "리콜", "recall", "행정처분", "판매중지", "판매 중지",
+    "품목정지", "품목 취소", "품목취소", "업무정지", "영업정지", "허가취소", "허가 취소",
+    "사용중지", "사용 중지", "잠정중지", "잠정 중지", "수입중지", "수입 중지",
+    "폐기명령", "폐기 명령", "과징금", "고발", "처분",
 ]
 RECALL_RISK_KEYWORDS = [
     "부적합", "위해성", "안전성 서한", "안전성 정보", "검출", "이물", "불순물", "오염", "품질부적합",
@@ -187,23 +196,39 @@ def _combined_text(title: str = "", summary: str = "", article_text: str = "", s
     ]).strip()
 
 
-def is_mfds_policy_article(title: str, summary: str = "", article_text: str = "") -> bool:
-    text = _combined_text(title, summary, article_text)
+def is_recall_disposition_event(title: str, summary: str = "", article_text: str = "", article_summary: str = "") -> bool:
+    """회수/처분 대표분류용 hard rule. 위험어 단독이 아니라 명시적 조치·처분 단어가 있어야 합니다."""
+    text = _combined_text(title, summary, article_text, article_summary=article_summary)
+    return _has_any(text, STRICT_RECALL_EVENT_KEYWORDS)
+
+
+def is_mfds_policy_article(title: str, summary: str = "", article_text: str = "", article_summary: str = "") -> bool:
+    text = _combined_text(title, summary, article_text, article_summary=article_summary)
     return _has_any(text, MFDS_TERMS) and _has_any(text, POLICY_ACTION_KEYWORDS + POLICY_CHANGE_KEYWORDS)
 
 
-def is_overseas_policy_article(title: str, summary: str = "", article_text: str = "") -> bool:
-    text = _combined_text(title, summary, article_text)
+def is_overseas_policy_article(title: str, summary: str = "", article_text: str = "", article_summary: str = "") -> bool:
+    text = _combined_text(title, summary, article_text, article_summary=article_summary)
     if not (_has_any(text, OVERSEAS_REGULATORS) and _has_any(text, POLICY_ACTION_KEYWORDS + POLICY_CHANGE_KEYWORDS)):
         return False
     # FDA/EMA words in approval/clinical pipeline articles should not be policy/guideline unless policy terms also appear.
-    if _has_any(text, CLINICAL_APPROVAL_EXCLUSION_FOR_POLICY) and not _has_any(text, ["guidance", "guideline", "가이드라인", "지침", "규정", "regulation", "EudraLex", "draft guidance"]):
+    if _has_any(text, CLINICAL_APPROVAL_EXCLUSION_FOR_POLICY) and not _has_any(text, ["guidance", "guideline", "가이드라인", "지침", "규정", "regulation", "EudraLex", "draft guidance", "개정", "행정예고", "고시"]):
         return False
     return True
 
 
-def is_policy_article(title: str, summary: str = "", article_text: str = "") -> bool:
-    return is_mfds_policy_article(title, summary, article_text) or is_overseas_policy_article(title, summary, article_text)
+def is_policy_article(title: str, summary: str = "", article_text: str = "", article_summary: str = "") -> bool:
+    return is_mfds_policy_article(title, summary, article_text, article_summary) or is_overseas_policy_article(title, summary, article_text, article_summary)
+
+
+def is_clinical_approval_article(title: str, summary: str = "", article_text: str = "", article_summary: str = "") -> bool:
+    text = _combined_text(title, summary, article_text, article_summary=article_summary)
+    return _has_any(text, APPROVAL_KEYWORDS)
+
+
+def is_reimbursement_article(title: str, summary: str = "", article_text: str = "", article_summary: str = "") -> bool:
+    text = _combined_text(title, summary, article_text, article_summary=article_summary)
+    return _has_any(text, REIMBURSEMENT_KEYWORDS)
 
 
 def is_gmp_quality_risk(title: str, summary: str = "", article_text: str = "") -> bool:
@@ -212,7 +237,7 @@ def is_gmp_quality_risk(title: str, summary: str = "", article_text: str = "") -
     if _has_any(text, GMP_RISK_KEYWORDS):
         return True
     return _has_any(text, GMP_CORE_KEYWORDS) and _has_any(text, [
-        "점검", "실사", "위반", "부적합", "오염", "불순물", "무균", "데이터", "Warning Letter", "483", "import alert", "회수", "품질",
+        "점검", "실사", "실태조사", "위반", "부적합", "오염", "불순물", "무균", "데이터", "Warning Letter", "483", "import alert", "회수", "품질",
     ])
 
 
@@ -279,14 +304,14 @@ def score_categories(title: str, summary: str = "", article_text: str = "", sour
         scores[category] = score
         raw_hits[category] = hits
 
-    # Gates and boosts. Broad categories are suppressed unless the article context supports them.
-    if _has_any(text, RECALL_KEYWORDS) or (_has_any(text, RECALL_RISK_KEYWORDS) and _has_any(text, ["회수", "처분", "판매중지", "품목취소", "영업정지", "부적합", "리콜", "폐기"])):
-        scores["회수/처분"] += 10
+    # Hard-rule gates. Broad categories are suppressed unless the article context supports them.
+    if is_recall_disposition_event(title, summary, article_text, article_summary):
+        scores["회수/처분"] += 12
     else:
         scores["회수/처분"] = 0
 
-    if is_policy_article(title, summary, article_text):
-        scores["정책/가이드라인"] += 9
+    if is_policy_article(title, summary, article_text, article_summary):
+        scores["정책/가이드라인"] += 10
     else:
         scores["정책/가이드라인"] = 0
 
@@ -305,12 +330,12 @@ def score_categories(title: str, summary: str = "", article_text: str = "", sour
     else:
         scores["해외규제"] = 0
 
-    if _has_any(text, APPROVAL_KEYWORDS):
+    if is_clinical_approval_article(title, summary, article_text, article_summary):
         scores["허가/임상"] += 6
     else:
         scores["허가/임상"] = 0
 
-    if _has_any(text, REIMBURSEMENT_KEYWORDS):
+    if is_reimbursement_article(title, summary, article_text, article_summary):
         scores["약가/보험"] += 7
     else:
         scores["약가/보험"] = 0
@@ -342,21 +367,55 @@ def classify_article_details(title: str, summary: str = "", article_text: str = 
     scores = score_categories(title, summary, article_text, source, rss_query, article_summary)
     hits_by_category = _category_hits(title, summary, article_text, source, rss_query, article_summary)
 
-    positive_categories = [cat for cat in CATEGORY_ORDER if scores.get(cat, 0) > 0]
-    if positive_categories:
-        max_score = max(scores[cat] for cat in positive_categories)
-        candidates = [cat for cat in positive_categories if scores[cat] == max_score]
-        category = sorted(candidates, key=lambda c: REPRESENTATIVE_PRIORITY.index(c) if c in REPRESENTATIVE_PRIORITY else 999)[0]
-    elif _has_any(text, PHARMA_FALLBACK_WORDS):
+    # Rule-first tags: these are not decided by raw score alone.
+    rule_tags: List[str] = []
+    if is_recall_disposition_event(title, summary, article_text, article_summary):
+        rule_tags.append("회수/처분")
+    if is_policy_article(title, summary, article_text, article_summary):
+        rule_tags.append("정책/가이드라인")
+    if is_gmp_quality_risk(title, summary, article_text):
+        rule_tags.append("GMP/품질")
+    if is_mfds_regulatory(title, summary, article_text):
+        rule_tags.append("식약처/규제")
+    if is_clinical_approval_article(title, summary, article_text, article_summary):
+        rule_tags.append("허가/임상")
+    if is_overseas_regulatory(title, summary, article_text):
+        rule_tags.append("해외규제")
+    if is_reimbursement_article(title, summary, article_text, article_summary):
+        rule_tags.append("약가/보험")
+
+    # Representative category: hard event/policy rules first, score only as secondary support.
+    approval_pipeline = _has_any(text, CLINICAL_APPROVAL_EXCLUSION_FOR_POLICY)
+    actual_policy = "정책/가이드라인" in rule_tags
+    if "회수/처분" in rule_tags:
+        category = "회수/처분"
+    elif actual_policy:
+        # FDA IND approval류는 policy term이 없으면 정책이 아니지만, actual_policy=True면 지침/고시 등 정책성 용어가 확인된 상태입니다.
+        category = "정책/가이드라인"
+    elif "GMP/품질" in rule_tags:
+        category = "GMP/품질"
+    elif "식약처/규제" in rule_tags and not ("허가/임상" in rule_tags and "해외규제" in rule_tags and not "식약처/규제" in rule_tags):
+        category = "식약처/규제"
+    elif "허가/임상" in rule_tags:
+        category = "허가/임상"
+    elif "해외규제" in rule_tags:
+        category = "해외규제"
+    elif "약가/보험" in rule_tags:
+        category = "약가/보험"
+    elif _has_any(text, INDUSTRY_KEYWORDS + SUPPLY_API_KEYWORDS + PHARMA_FALLBACK_WORDS):
         category = "산업/경영"
         scores[category] = max(scores.get(category, 0), 1)
     else:
         category = "산업/경영"
+        scores[category] = max(scores.get(category, 0), 1)
 
-    # Multi-tags: include categories with meaningful scores plus important contextual tags.
+    # Multi-tags: hard-rule tags first, then score-supported broader context.
     tags: List[str] = []
+    for cat in rule_tags:
+        if cat not in tags:
+            tags.append(cat)
     for cat in CATEGORY_ORDER:
-        threshold = 5 if cat != "산업/경영" else 6
+        threshold = 6 if cat != "산업/경영" else 7
         if scores.get(cat, 0) >= threshold and cat not in tags:
             tags.append(cat)
     if category not in tags:
@@ -396,7 +455,8 @@ def classify_article_details(title: str, summary: str = "", article_text: str = 
         basis_parts.append("기사요약")
     if normalize_text(article_text):
         basis_parts.append("본문")
-    classification_reason = f"대표분류={category}; 근거={evidence}; 분석범위={'+'.join(basis_parts)}"
+    rule_text = ",".join(rule_tags) if rule_tags else "보조분류"
+    classification_reason = f"대표분류={category}; hard_rule={rule_text}; 근거={evidence}; 분석범위={'+'.join(basis_parts)}"
 
     return {
         "category": category,
@@ -407,7 +467,6 @@ def classify_article_details(title: str, summary: str = "", article_text: str = 
         "classification_reason": classification_reason,
         "classification_score": score_text,
     }
-
 
 def classify_article(title: str, summary: str = "", article_text: str = "", source: str = "", rss_query: str = "", article_summary: str = "") -> Tuple[str, str, str, bool]:
     result = classify_article_details(title, summary, article_text, source, rss_query, article_summary)
