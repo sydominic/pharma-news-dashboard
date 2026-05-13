@@ -25,6 +25,15 @@ from modules.news_cleaner import (
 )
 from modules.policy_links import extract_policy_articles, mfds_board_links, mfds_board_home_links
 from modules.rss_collector import collect_google_news, load_rss_config
+from modules.supabase_cache import (
+    CACHE_DAYS,
+    is_supabase_configured,
+    load_recent_articles,
+    prune_old_articles,
+    read_latest_log,
+    upsert_articles,
+    write_collection_log,
+)
 from modules.ui_components import article_card, esc, header, inject_css, kpi_card, keyword_pills, section_title, timeline_item, title_with_link
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -32,12 +41,15 @@ DATA_DIR = BASE_DIR / "data"
 CONFIG_PATH = DATA_DIR / "rss_sources.json"
 RAW_PATH = DATA_DIR / "news_raw.csv"
 CLEAN_PATH = DATA_DIR / "news_clean.csv"
-APP_VERSION = "v1.28"
+APP_VERSION = "v1.30"
 
 st.set_page_config(page_title="제약뉴스 RSS 대시보드", page_icon="📰", layout="wide", initial_sidebar_state="collapsed")
 inject_css()
 
 IMPORTANCE_ORDER = {"높음": 3, "중간": 2, "일반": 1}
+INITIAL_SUPABASE_LOAD_DAYS = 7
+EXTENDED_SUPABASE_LOAD_DAYS = CACHE_DAYS
+
 
 
 def _read_app_password() -> str:
@@ -133,32 +145,67 @@ def count_keywords(df: pd.DataFrame) -> Counter:
     return counter
 
 
+def supabase_enabled() -> bool:
+    return is_supabase_configured(st.secrets)
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def load_cached_supabase_articles(days: int = CACHE_DAYS) -> pd.DataFrame:
+    return load_recent_articles(st.secrets, days=days)
+
+
+def load_cached_news(days: int = INITIAL_SUPABASE_LOAD_DAYS) -> pd.DataFrame:
+    if supabase_enabled():
+        try:
+            df = load_cached_supabase_articles(days)
+            if not df.empty:
+                st.session_state["supabase_loaded_days"] = days
+                return df
+        except Exception as exc:
+            st.warning(f"Supabase 캐시 로드 실패: {exc}. 로컬 CSV로 전환합니다.")
+    return load_news(CLEAN_PATH)
+
+
+def save_cached_news(df: pd.DataFrame, added_count: int = 0) -> None:
+    save_news(df, CLEAN_PATH)
+    if supabase_enabled():
+        try:
+            upsert_articles(st.secrets, df, days=EXTENDED_SUPABASE_LOAD_DAYS)
+            prune_old_articles(st.secrets, days=EXTENDED_SUPABASE_LOAD_DAYS)
+            write_collection_log(st.secrets, "success", added_count=added_count, total_count=len(df))
+            load_cached_supabase_articles.clear()
+        except Exception as exc:
+            write_collection_log(st.secrets, "error", added_count=added_count, total_count=len(df), error_message=str(exc))
+            st.warning(f"Supabase 캐시 저장 실패: {exc}. 화면은 로컬 CSV 기준으로 계속 표시합니다.")
+
+
 def collect_and_save(start_date=None, end_date=None, max_items_per_query: int | None = None) -> Tuple[pd.DataFrame, List[str], int]:
     raw = collect_google_news(CONFIG_PATH, start_date=start_date, end_date=end_date, max_items_per_query=max_items_per_query)
     errors = raw.attrs.get("errors", []) if hasattr(raw, "attrs") else []
     if not raw.empty:
         raw.to_csv(RAW_PATH, index=False, encoding="utf-8-sig")
     clean = normalize_and_classify(raw)
-    existing = load_news(CLEAN_PATH)
+    existing = load_cached_news(EXTENDED_SUPABASE_LOAD_DAYS)
     before = len(existing)
     merged = merge_existing(existing, clean)
-    save_news(merged, CLEAN_PATH)
     added = max(len(merged) - before, 0)
+    save_cached_news(merged, added_count=added)
     return merged, errors, added
 
 
-def load_or_collect_initial() -> pd.DataFrame:
+def load_or_collect_initial(days: int = INITIAL_SUPABASE_LOAD_DAYS) -> pd.DataFrame:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    df = load_news(CLEAN_PATH)
+    df = load_cached_news(days)
     if not df.empty:
         # v1.4 분류체계(정책/가이드라인 포함)로 기존 누적자료를 다시 보정
         df = repair_and_reclassify(df, force=True)
+        # 앱 열 때마다 Supabase upsert를 다시 수행하지 않고 로컬 CSV만 보정 저장합니다.
         save_news(df, CLEAN_PATH)
         return df
     try:
-        with st.spinner("최초 실행: 최근 7일 Google News RSS에서 기사 수집 중입니다..."):
+        with st.spinner(f"최초 실행: 최근 {days}일 Google News RSS에서 기사 수집 중입니다..."):
             today = date.today()
-            df, errors, _ = collect_and_save(start_date=today - timedelta(days=6), end_date=today)
+            df, errors, _ = collect_and_save(start_date=today - timedelta(days=days - 1), end_date=today)
         if errors:
             st.warning("일부 RSS 검색식에서 수집 오류가 있었습니다. 수집된 데이터는 정상 표시합니다.")
         if not df.empty:
@@ -571,9 +618,17 @@ def source_status() -> str:
         cfg = load_rss_config(CONFIG_PATH)
         enabled = [q for q in cfg.get("queries", []) if q.get("enabled", True)]
         boosted = [q for q in enabled if q.get("collection_group") == "core_media_boost"]
+        base = f"등록 검색식 {len(enabled)}개"
         if boosted:
-            return f"등록 검색식 {len(enabled)}개 · 핵심언론 강화 {len(boosted)}개"
-        return f"등록 검색식 {len(enabled)}개"
+            base += f" · 핵심언론 강화 {len(boosted)}개"
+        if supabase_enabled():
+            try:
+                log = read_latest_log(st.secrets)
+                collected_at = str(log.get("collected_at", ""))[:16].replace("T", " ") if log else ""
+                return base + f" · Supabase 캐시 사용(로드 {st.session_state.get('supabase_loaded_days', INITIAL_SUPABASE_LOAD_DAYS)}일/보관 {CACHE_DAYS}일)" + (f" · 최근수집 {collected_at}" if collected_at else "")
+            except Exception:
+                return base + f" · Supabase 캐시 설정됨(첫 화면 {INITIAL_SUPABASE_LOAD_DAYS}일 우선 로드)"
+        return base + " · 로컬 CSV 모드"
     except Exception:
         return "RSS 설정 확인 필요"
 
@@ -645,6 +700,7 @@ def render_collect_scope_popover() -> None:
                 - 선택한 수집기간을 Google News RSS 검색식에 `after:YYYY-MM-DD`, `before:YYYY-MM-DD` 조건으로 붙입니다.
                 - 단, Google News RSS는 공식 API가 아니므로 결과 누락 또는 정렬 차이가 있을 수 있습니다.
                 - 각 검색식당 최대 수집 건수도 함께 제한합니다.
+                - Supabase 설정 시 최근 30일 기사 메타데이터를 보관하고, 앱 첫 화면은 최근 7일만 우선 로드합니다.
                 """
             )
     else:
@@ -665,7 +721,7 @@ def render_policy_card(row: pd.Series) -> None:
 require_password_if_configured()
 
 # 데이터 로드
-all_df = prepare_display_df(load_or_collect_initial())
+all_df = prepare_display_df(load_or_collect_initial(INITIAL_SUPABASE_LOAD_DAYS))
 
 header(
     "제약뉴스 RSS 대시보드",
@@ -673,14 +729,9 @@ header(
 )
 
 # 조회조건: 기존 큰 영역을 줄여 상단 얇은 검색바 형태로 구성
-if all_df.empty:
-    min_date = max_date = date.today()
-    default_start = max_date - timedelta(days=6)
-else:
-    date_series = pd.to_datetime(all_df["date"], errors="coerce").dt.date.dropna()
-    min_date = date_series.min() if not date_series.empty else date.today()
-    max_date = date_series.max() if not date_series.empty else date.today()
-    default_start = max(max_date - timedelta(days=6), min_date)
+max_date = date.today()
+min_date = max_date - timedelta(days=EXTENDED_SUPABASE_LOAD_DAYS - 1)
+default_start = max_date - timedelta(days=INITIAL_SUPABASE_LOAD_DAYS - 1)
 
 with st.container(border=True):
     st.markdown("<div class='compact-filter-title'>조회조건</div>", unsafe_allow_html=True)
@@ -699,7 +750,7 @@ with st.container(border=True):
     with c5:
         search_keyword = st.text_input("검색어", placeholder="제목, 키워드, 언론사 검색", label_visibility="collapsed")
     with c6:
-        collect_days = st.selectbox("RSS 수집기간", [1, 3, 7, 14, 30, 90], index=2, format_func=lambda x: f"최근 {x}일", label_visibility="collapsed")
+        collect_days = st.selectbox("RSS 수집기간", [1, 3, 7, 14, 30, 90], index=4, format_func=lambda x: f"최근 {x}일", label_visibility="collapsed")
     with c7:
         max_items = st.selectbox("쿼리당 수집", [50, 80, 100], index=2, format_func=lambda x: f"{x}건/식", label_visibility="collapsed")
 
@@ -715,6 +766,15 @@ if isinstance(selected_range, tuple) and len(selected_range) == 2:
     start_date, end_date = selected_range
 else:
     start_date = end_date = selected_range
+
+# 조회기간이 최근 7일보다 길어지면 그때 최근 30일 캐시를 추가 로드합니다.
+try:
+    needs_extended_load = start_date < (date.today() - timedelta(days=INITIAL_SUPABASE_LOAD_DAYS - 1))
+except Exception:
+    needs_extended_load = False
+if needs_extended_load:
+    with st.spinner("조회기간 확장: Supabase 최근 30일 캐시 추가 로드 중입니다..."):
+        all_df = prepare_display_df(load_or_collect_initial(EXTENDED_SUPABASE_LOAD_DAYS))
 
 if collect_clicked:
     try:
