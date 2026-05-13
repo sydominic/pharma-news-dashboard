@@ -22,6 +22,8 @@ from modules.news_cleaner import (
     sample_news,
     save_news,
     to_excel_bytes,
+    is_excluded_notice_article,
+    REGULATORY_KEEP_TERMS,
 )
 from modules.policy_links import extract_policy_articles, mfds_board_links, mfds_board_home_links
 from modules.rss_collector import collect_google_news, load_rss_config
@@ -41,7 +43,7 @@ DATA_DIR = BASE_DIR / "data"
 CONFIG_PATH = DATA_DIR / "rss_sources.json"
 RAW_PATH = DATA_DIR / "news_raw.csv"
 CLEAN_PATH = DATA_DIR / "news_clean.csv"
-APP_VERSION = "v1.35-hybrid-rules-summary-popup"
+APP_VERSION = "v1.37-no-summary-strict-noise-filter"
 
 st.set_page_config(page_title="제약뉴스 RSS 대시보드", page_icon="📰", layout="wide", initial_sidebar_state="collapsed")
 inject_css()
@@ -217,6 +219,8 @@ def load_or_collect_initial(days: int = INITIAL_SUPABASE_LOAD_DAYS) -> pd.DataFr
 
 def prepare_display_df(df: pd.DataFrame) -> pd.DataFrame:
     work = repair_and_reclassify(df, force=False).copy()
+    if not work.empty:
+        work = work[~work.apply(lambda r: is_excluded_notice_article(r.get("title", ""), r.get("summary", ""), r.get("article_text", ""), r.get("source", ""), r.get("rss_query", ""), r.get("link", "")), axis=1)].copy()
     for col in STANDARD_COLUMNS:
         if col not in work.columns:
             work[col] = ""
@@ -381,6 +385,39 @@ def issue_similarity(a_title: object, b_title: object) -> float:
     return max(overlap, text_sim * 0.8)
 
 
+def _row_has_regulatory_signal(row: pd.Series) -> bool:
+    combined = " ".join([
+        str(row.get("title", "")),
+        str(row.get("summary", "")),
+        str(row.get("article_text", ""))[:800],
+        str(row.get("keywords", "")),
+        str(row.get("sub_tags", "")),
+        str(row.get("category", "")),
+        str(row.get("classification_reason", "")),
+    ])
+    lower = combined.lower()
+    if str(row.get("category", "")) in {"회수/처분", "정책/가이드라인", "식약처/규제", "GMP/품질", "해외규제", "허가/임상", "약가/보험"}:
+        return True
+    return any(term.lower() in lower for term in REGULATORY_KEEP_TERMS)
+
+
+def _is_groupable_issue_row(row: pd.Series) -> bool:
+    title = str(row.get("title", ""))
+    if is_excluded_notice_article(title, row.get("summary", ""), row.get("article_text", ""), row.get("source", ""), row.get("rss_query", ""), row.get("link", "")):
+        return False
+    tokens = issue_tokens(title)
+    if len(tokens) < 2:
+        return False
+    combined = f"{title} {row.get('summary','')} {row.get('keywords','')} {row.get('sub_tags','')} {row.get('category','')}"
+    # 무관한 긴 영문 조각, 기사 목록/홈 링크성 조각은 이슈 묶음에서 제외
+    if not re.search(r"[가-힣]", str(combined)) and not _row_has_regulatory_signal(row):
+        return False
+    # 주요 규제/품질/허가 신호가 없는 산업 잡뉴스는 이슈 묶음 대표로 올리지 않음
+    if not _row_has_regulatory_signal(row):
+        return False
+    return True
+
+
 def group_similar_issues(df: pd.DataFrame, max_groups: int = 8, threshold: float = 0.46) -> list[dict]:
     if df is None or df.empty:
         return []
@@ -390,6 +427,8 @@ def group_similar_issues(df: pd.DataFrame, max_groups: int = 8, threshold: float
         title = str(row.get("title", ""))
         category = str(row.get("category", ""))
         if not title:
+            continue
+        if not _is_groupable_issue_row(row):
             continue
         placed = False
         for group in groups:
@@ -419,7 +458,9 @@ def render_issue_groups(groups: list[dict]) -> None:
         return
     html_parts = ["<div class='issue-group-wrap'>"]
     for group in groups:
-        rows = group["rows"][:5]
+        rows = [r for r in group["rows"] if _is_groupable_issue_row(r)][:5]
+        if not rows:
+            continue
         sources = sorted([s for s in group["sources"] if s])
         rep = rows[0]
         source_txt = ", ".join(sources[:5])
@@ -604,8 +645,8 @@ def render_table(df: pd.DataFrame, height: int = 500) -> None:
     if df.empty:
         st.info("표시할 기사 데이터가 없습니다.")
         return
-    view = df[["published_at", "source", "category", "importance", "title", "article_summary", "sub_tags", "keywords", "link"]].copy()
-    view = view.rename(columns={"published_at": "발행일시", "source": "언론사", "category": "카테고리", "importance": "중요도", "title": "제목", "article_summary": "기사요약", "sub_tags": "다중태그", "keywords": "키워드", "link": "원문"})
+    view = df[["published_at", "source", "category", "importance", "title", "sub_tags", "keywords", "link"]].copy()
+    view = view.rename(columns={"published_at": "발행일시", "source": "언론사", "category": "카테고리", "importance": "중요도", "title": "제목", "sub_tags": "다중태그", "keywords": "키워드", "link": "원문"})
     st.dataframe(
         view,
         use_container_width=True,
@@ -613,7 +654,6 @@ def render_table(df: pd.DataFrame, height: int = 500) -> None:
         column_config={
             "원문": st.column_config.LinkColumn("원문", display_text="원문 열기"),
             "제목": st.column_config.TextColumn("제목", width="large"),
-            "기사요약": st.column_config.TextColumn("기사요약", width="large"),
             "다중태그": st.column_config.TextColumn("다중태그", width="medium"),
             "키워드": st.column_config.TextColumn("키워드", width="medium"),
             "카테고리": st.column_config.TextColumn("카테고리", width="small"),
@@ -699,7 +739,6 @@ def render_link_diagnostics(all_data: pd.DataFrame, filtered_data: pd.DataFrame)
     filtered_link_count = int(filtered_data["link"].fillna("").astype(str).str.strip().ne("").sum()) if filtered_count and "link" in filtered_data.columns else 0
     candidate_cols = [c for c in ["link", "url", "article_url", "google_link", "rss_link", "source_url", "article_link", "origin_link"] if all_data is not None and c in all_data.columns]
     body_success_count = int(all_data.get("body_fetch_status", pd.Series([], dtype=str)).fillna("").astype(str).str.contains("본문수집성공", na=False).sum()) if all_count else 0
-    summary_count = int(all_data.get("article_summary", pd.Series([], dtype=str)).fillna("").astype(str).str.strip().ne("").sum()) if all_count else 0
 
     with st.expander("🔧 진단 정보 보기", expanded=False):
         st.markdown(
@@ -708,7 +747,7 @@ def render_link_diagnostics(all_data: pd.DataFrame, filtered_data: pd.DataFrame)
             - 전체 기사: **{all_count:,}건** / link 보유: **{all_link_count:,}건** / link 공란: **{max(all_count - all_link_count, 0):,}건**
             - 현재 조회 결과: **{filtered_count:,}건** / link 보유: **{filtered_link_count:,}건** / link 공란: **{max(filtered_count - filtered_link_count, 0):,}건**
             - 확인된 링크 후보 컬럼: `{', '.join(candidate_cols) if candidate_cols else '없음'}`
-            - 기사요약 생성: **{summary_count:,}건** / 원문본문 수집성공: **{body_success_count:,}건**
+            - 원문본문 수집성공: **{body_success_count:,}건**
             """
         )
         if all_count and all_link_count == 0:
@@ -748,7 +787,8 @@ def render_collect_scope_popover() -> None:
                 - 단, Google News RSS는 공식 API가 아니므로 결과 누락 또는 정렬 차이가 있을 수 있습니다.
                 - 각 검색식당 최대 수집 건수도 함께 제한합니다.
                 - Supabase 설정 시 최근 30일 기사 메타데이터를 보관하고, 앱 첫 화면은 최근 7일만 우선 로드합니다.
-                - v1.34부터 수집 단계에서 원문 본문 일부를 가능한 범위로 읽고, 기사별 3~5줄 요약과 내용 기반 분류근거를 저장합니다.
+                - 수집 단계에서 원문 본문 일부를 가능한 범위로 읽고, 제목·RSS요약·본문 기반 분류근거를 저장합니다.
+                - 기사 요약보기 팝업 기능은 v1.36에서 제거했습니다.
                 """
             )
     else:

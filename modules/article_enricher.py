@@ -230,17 +230,15 @@ def summarize_article(title: str, rss_summary: str = "", article_text: str = "",
     return "\n".join([f"- {line}" for line in final[:max_lines]])
 
 def enrich_article(title: str, rss_summary: str, link: str, fetch_body: bool = True, timeout_sec: int = 5, max_chars: int = 6000) -> dict:
+    """원문 본문 일부만 수집한다. 기사 요약보기 기능은 v30에서 폐기했다."""
     body = ""
     status = "RSS요약사용"
     if fetch_body:
         body, status = fetch_article_text(link, timeout_sec=timeout_sec, max_chars=max_chars)
         if not body:
             status = status or "RSS요약사용"
-    summary = summarize_article(title, rss_summary, body, max_lines=4)
-    if not body and "수집상태: 본문수집제한/RSS요약부족" in summary:
-        summary = summary.replace("수집상태: 본문수집제한/RSS요약부족", f"수집상태: {status or '본문수집제한'}")
     return {
         "article_text": body,
-        "article_summary": summary,
+        "article_summary": "",
         "body_fetch_status": status,
     }

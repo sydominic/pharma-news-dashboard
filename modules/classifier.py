@@ -189,7 +189,6 @@ def _combined_text(title: str = "", summary: str = "", article_text: str = "", s
     return " ".join([
         normalize_text(title),
         normalize_text(summary),
-        normalize_text(article_summary),
         normalize_text(article_text),
         normalize_text(source),
         normalize_text(rss_query),
@@ -282,7 +281,7 @@ def policy_type(title: str, summary: str = "", article_text: str = "") -> str:
 
 def _weighted_hits(title: str, summary: str, article_text: str, source: str, rss_query: str, article_summary: str, keywords: List[str]) -> tuple[int, List[str]]:
     title_text = normalize_text(title)
-    summary_text = " ".join([normalize_text(summary), normalize_text(article_summary)])
+    summary_text = normalize_text(summary)
     body_text = " ".join([normalize_text(article_text), normalize_text(source), normalize_text(rss_query)])
     title_hits = _match_keywords(title_text, keywords)
     summary_hits = _match_keywords(summary_text, keywords)
@@ -451,8 +450,6 @@ def classify_article_details(title: str, summary: str = "", article_text: str = 
         score_text = "산업/경영:1"
     evidence = ", ".join(keyword_hits[:8]) if keyword_hits else "직접 키워드 부족"
     basis_parts = ["제목", "RSS요약"]
-    if normalize_text(article_summary):
-        basis_parts.append("기사요약")
     if normalize_text(article_text):
         basis_parts.append("본문")
     rule_text = ",".join(rule_tags) if rule_tags else "보조분류"

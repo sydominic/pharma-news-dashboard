@@ -18,6 +18,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from .article_enricher import enrich_article
+from .news_cleaner import is_excluded_notice_article
 
 KST = ZoneInfo("Asia/Seoul")
 GOOGLE_NEWS_RSS = "https://news.google.com/rss/search"
@@ -168,6 +169,8 @@ def collect_google_news(config_path: str | Path, start_date=None, end_date=None,
             published_at = parse_datetime(entry)
             summary = strip_html(entry.get("summary", ""))
             link = str(entry.get("link", "")).strip()
+            if is_excluded_notice_article(title=title, summary=summary, source=source, rss_query=query, link=link):
+                continue
             uid = make_uid(title, source, published_at)
             rows.append(
                 {
@@ -214,11 +217,18 @@ def collect_google_news(config_path: str | Path, start_date=None, end_date=None,
             timeout_sec=article_body_timeout_sec,
             max_chars=article_body_max_chars,
         )
-        df.at[idx, "article_text"] = enriched.get("article_text", "")
-        df.at[idx, "article_summary"] = enriched.get("article_summary", "")
+        article_text = enriched.get("article_text", "")
+        if is_excluded_notice_article(title=row.get("title", ""), summary=row.get("summary", ""), article_text=article_text, source=row.get("source", ""), rss_query=row.get("rss_query", ""), link=row.get("link", "")):
+            df.at[idx, "_drop_noise"] = True
+            continue
+        df.at[idx, "article_text"] = article_text
+        df.at[idx, "article_summary"] = ""
         df.at[idx, "body_fetch_status"] = enriched.get("body_fetch_status", "RSS요약사용")
         if should_fetch:
             time.sleep(0.05)
+
+    if "_drop_noise" in df.columns:
+        df = df[df["_drop_noise"] != True].drop(columns=["_drop_noise"])
 
     df["published_at"] = df["published_at"].dt.strftime("%Y-%m-%d %H:%M:%S")
     df.attrs["errors"] = errors

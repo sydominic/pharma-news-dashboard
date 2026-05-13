@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import base64
-import hashlib
 import html
 from pathlib import Path
 from typing import Iterable
@@ -12,20 +10,7 @@ import streamlit as st
 from .classifier import category_palette
 
 
-def _asset_data_uri(filename: str) -> str:
-    path = Path(__file__).resolve().parents[1] / "assets" / filename
-    if not path.exists():
-        return ""
-    mime = "image/webp" if path.suffix.lower() == ".webp" else "image/png"
-    try:
-        return f"data:{mime};base64," + base64.b64encode(path.read_bytes()).decode("ascii")
-    except Exception:
-        return ""
-
-
 def inject_css() -> None:
-    summary_bg_uri = _asset_data_uri("summary_board.webp")
-    summary_bg_css = f"background-image:url('{summary_bg_uri}');" if summary_bg_uri else "background:linear-gradient(135deg,#eef6ff,#ffffff);"
     css = """
         <style>
         :root { --hanall-navy:#081f3f; --hanall-navy2:#102f59; --hanall-blue:#0065d8; --hanall-sky:#00a3d7; --hanall-teal:#00a6a6; --hanall-green:#68b545; --hanall-orange:#f47b20; --hanall-red:#d94d4d; --line:#d7e1ee; --soft:#f5f8fc; }
@@ -62,19 +47,6 @@ def inject_css() -> None:
         .link-row { display:flex; align-items:center; gap:8px; margin:6px 0 9px; flex-wrap:wrap; }
         .icon-link { display:inline-flex; align-items:center; justify-content:center; min-width:92px; height:34px; padding:0 13px; border-radius:999px; border:1px solid #8db9ee; background:#eaf3ff; color:#005ec7 !important; font-weight:900; text-decoration:none !important; font-size:13px; white-space:nowrap; box-shadow:0 4px 10px rgba(0,101,216,0.10); }
         .icon-link:hover { background:#0065d8; color:#fff !important; border-color:#0065d8; }
-        .summary-open-btn { display:inline-flex; align-items:center; justify-content:center; min-width:116px; height:34px; padding:0 13px; border-radius:999px; border:1px solid #b8c7da; background:#f8fbff; color:#0b3b6d; font-weight:900; font-size:13px; cursor:pointer; box-shadow:0 4px 10px rgba(8,31,63,0.06); }
-        .summary-open-btn:hover { background:#081f3f; color:#fff; border-color:#081f3f; }
-        .summary-popover { width:min(1120px,94vw); height:min(760px,88vh); border:0; border-radius:26px; padding:0; overflow:hidden; box-shadow:0 28px 80px rgba(8,31,63,0.35); background:#fff; __SUMMARY_BOARD_BG__ background-size:cover; background-position:center; }
-        .summary-popover::backdrop { background:rgba(5,20,40,0.48); backdrop-filter:blur(2px); }
-        .summary-close-btn { position:absolute; right:22px; top:18px; z-index:4; border:1px solid #d7e1ee; background:rgba(255,255,255,0.92); color:#081f3f; border-radius:999px; height:34px; padding:0 14px; font-weight:900; cursor:pointer; box-shadow:0 4px 12px rgba(8,31,63,0.12); }
-        .summary-board-text { position:absolute; left:34%; top:10.5%; width:57%; height:76%; padding:22px 28px; overflow:auto; color:#0b213d; }
-        .summary-board-text h4 { margin:0 0 8px; color:#081f3f; font-size:22px; line-height:1.35; font-weight:900; letter-spacing:-0.35px; }
-        .summary-board-meta { color:#5e7189; font-size:12px; font-weight:800; margin-bottom:14px; display:flex; gap:8px; flex-wrap:wrap; }
-        .summary-board-text ul { margin:12px 0 0; padding-left:20px; }
-        .summary-board-text li { margin-bottom:10px; line-height:1.62; font-size:15px; font-weight:750; }
-        .summary-status { display:inline-block; margin-top:10px; color:#64748b; font-size:12px; font-weight:800; }
-        .classification-reason { margin-top:12px; padding:9px 11px; border-radius:12px; background:rgba(255,255,255,0.72); border:1px dashed #b6c8dd; color:#49627d; font-size:12px; line-height:1.5; }
-        @media (max-width:900px) { .summary-popover { background-image:none !important; background:linear-gradient(135deg,#ffffff,#eef6ff) !important; } .summary-board-text { left:5%; top:8%; width:90%; height:82%; padding:18px; } }
         .missing-link { display:inline-flex; align-items:center; justify-content:center; min-width:82px; height:30px; padding:0 12px; border-radius:999px; border:1px solid #d7e1ee; background:#f2f5f9; color:#7a8796; font-weight:900; font-size:12px; }
         .news-summary { color:#54657b; font-size:13px; line-height:1.55; margin-bottom:10px; }
         .tag { display:inline-flex; align-items:center; border-radius:999px; padding:4px 8px; font-size:11px; font-weight:800; border:1px solid rgba(0,0,0,0.08); background:#eef6ff; color:#0065d8; margin-right:4px; margin-bottom:4px; }
@@ -128,7 +100,6 @@ def inject_css() -> None:
         @media (max-width:760px) { .kanban-wrap { grid-template-columns:1fr; } .policy-board-grid { grid-template-columns:1fr; } .timeline-row { grid-template-columns:64px 18px minmax(0,1fr); } .hanall-header::after { display:none; } .stTabs [data-baseweb="tab"] { font-size:14px; padding:0 9px; } }
         </style>
         """
-    css = css.replace("__SUMMARY_BOARD_BG__", summary_bg_css)
     st.markdown(css, unsafe_allow_html=True)
 
 
@@ -169,53 +140,18 @@ def importance_tag(importance: str) -> str:
     return f"<span class='tag {cls}'>중요도 {importance}</span>"
 
 
-def _split_summary_lines(value: object) -> list[str]:
-    raw = str(value or "")
-    lines: list[str] = []
-    for line in raw.replace("\r", "\n").split("\n"):
-        clean = line.strip().strip("-• ").strip()
-        if clean and clean.lower() not in {"nan", "none", "null"}:
-            lines.append(clean)
-    return lines
-
-
-def _summary_popover_html(row: pd.Series, show_reason: bool = False) -> str:
-    if row is None:
-        return ""
-    summary = row.get("article_summary", "") or row.get("summary", "")
-    lines = _split_summary_lines(summary)
-    if not lines:
-        lines = ["요약 정보가 없습니다. 원문 열기를 통해 기사 본문을 확인해 주세요."]
-    status = esc(row.get("body_fetch_status", ""))
-    reason = esc(row.get("classification_reason", "")) if show_reason else ""
-    title = esc(row.get("title", ""))
-    source = esc(row.get("source", ""))
-    published = esc(row.get("published_at", "")) or esc(row.get("time", ""))
-    tags = [x.strip() for x in str(row.get("sub_tags", "")).split(",") if x.strip() and x.strip().lower() not in {"nan", "none"}][:5]
-    tag_html = "".join([f"<span class='tag'>{esc(t)}</span>" for t in tags])
-    reason_html = f"<div class='classification-reason'>분류근거: {reason}</div>" if reason else ""
-    status_html = f"<span class='summary-status'>수집상태: {status}</span>" if status else ""
-    list_html = "".join([f"<li>{esc(line)}</li>" for line in lines[:5]])
-    uid_src = f"{row.get('uid','')}|{row.get('link','')}|{row.get('title','')}"
-    pop_id = "summary_" + hashlib.md5(uid_src.encode("utf-8", errors="ignore")).hexdigest()[:12]
-    return (
-        f"<button class='summary-open-btn' popovertarget='{pop_id}' type='button'>기사 요약 보기</button>"
-        f"<div id='{pop_id}' popover class='summary-popover'>"
-        f"<button class='summary-close-btn' popovertarget='{pop_id}' popovertargetaction='hide' type='button'>닫기 ×</button>"
-        f"<div class='summary-board-text'><h4>{title}</h4>"
-        f"<div class='summary-board-meta'><span>{source}</span><span>{published}</span></div>"
-        f"<div>{tag_html}</div><ul>{list_html}</ul>{status_html}{reason_html}</div>"
-        f"</div>"
-    )
-
 def title_with_link(title: object, link: object, row: pd.Series | None = None, show_reason: bool = False) -> str:
     safe_title = esc(title)
     safe_link = esc(link)
     title_html = f"<div class='news-title-row'><div class='news-title'>{safe_title}</div></div>"
-    summary_html = _summary_popover_html(row, show_reason=show_reason) if row is not None else ""
+    reason_html = ""
+    if show_reason and row is not None:
+        reason = esc(row.get("classification_reason", ""))
+        if reason:
+            reason_html = f"<div class='classification-reason'>분류근거: {reason}</div>"
     if safe_link:
-        return title_html + f"<div class='link-row'><a class='icon-link' href='{safe_link}' target='_blank' rel='noopener noreferrer' title='원문 열기'>원문 열기 ↗</a>{summary_html}</div>"
-    return title_html + f"<div class='link-row'><span class='missing-link'>링크 없음</span>{summary_html}</div>"
+        return title_html + f"<div class='link-row'><a class='icon-link' href='{safe_link}' target='_blank' rel='noopener noreferrer' title='원문 열기'>원문 열기 ↗</a></div>" + reason_html
+    return title_html + "<div class='link-row'><span class='missing-link'>링크 없음</span></div>" + reason_html
 
 
 def article_card(row: pd.Series, show_summary: bool = True) -> None:

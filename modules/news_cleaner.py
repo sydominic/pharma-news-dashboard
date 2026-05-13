@@ -10,7 +10,6 @@ import pandas as pd
 from bs4 import BeautifulSoup
 
 from .classifier import CATEGORY_ORDER, classify_article, classify_article_details
-from .article_enricher import summarize_article
 
 STANDARD_COLUMNS: List[str] = [
     "uid", "published_at", "date", "time", "source", "category", "keywords", "importance", "qa_flag",
@@ -23,6 +22,104 @@ VALID_CATEGORIES = set(CATEGORY_ORDER + ["기타"])
 NULL_LIKE = {"", "nan", "none", "nat", "null", "na", "n/a", "<na>"}
 LINK_CANDIDATE_COLUMNS = ["link", "url", "article_url", "google_link", "rss_link", "source_url", "article_link", "origin_link"]
 
+
+NOTICE_NOISE_TERMS = [
+    "화촉", "부음", "부고", "인사", "인사동정", "동정", "알림", "사령", "결혼", "별세",
+    "부친상", "모친상", "빙부상", "빙모상", "시부상", "시모상", "형제상", "자녀상",
+    "약업계 인사", "제약계 인사", "제약바이오 인사", "병원 인사", "기관 인사",
+    "임원 인사", "승진", "전보", "선임", "임명", "취임", "영입", "퇴임",
+]
+OUTLET_NAMES = [
+    "데일리팜", "팜뉴스", "히트뉴스", "약업신문", "약사공론", "의학신문", "메디파나뉴스", "한국의약통신",
+    "메디컬타임즈", "청년의사", "라포르시안", "헬스조선", "메디소비자뉴스", "바이오스펙테이터",
+]
+NOTICE_NOISE_REGEX = re.compile(
+    r"(\[\s*(화촉|부음|부고|인사|동정|알림|사령)\s*\]|"
+    r"\b(화촉|부음|부고|인사동정|동정|사령)\b|"
+    r"(부친상|모친상|빙부상|빙모상|시부상|시모상|형제상|자녀상|별세|결혼))"
+)
+PERSONNEL_NOISE_REGEX = re.compile(
+    r"(약업계\s*인사|제약(?:바이오)?\s*인사|병원\s*인사|기관\s*인사|임원\s*인사|"
+    r"\b(승진|전보|선임|임명|취임|부임|영입|퇴임)\b|"
+    r"[가-힣]{2,4}\s*(?:전\s*)?(?:데일리팜|팜뉴스|히트뉴스|약업신문|약사공론|의학신문|메디파나뉴스)\s*기자)"
+)
+GENERIC_AGGREGATE_TITLE_REGEX = re.compile(
+    r"^(데일리팜|팜뉴스|히트뉴스|약업신문|약사공론|의학신문|메디파나뉴스|한국의약통신|메디컬타임즈|청년의사|라포르시안|헬스조선|메디소비자뉴스|바이오스펙테이터)\s*(?:[-–—|·:]|\s+)\s*\1\s*(?:뉴스)?\s*(↗)?$"
+)
+REGULATORY_KEEP_TERMS = [
+    "식약처", "식품의약품안전처", "MFDS", "FDA", "EMA", "PMDA", "EDQM", "PIC/S", "PICS", "ICH", "MHRA",
+    "GMP", "KGMP", "실태조사", "실사", "감사", "제조소", "제조관리", "품질", "품질부적합",
+    "회수", "행정처분", "판매중지", "업무정지", "허가취소", "과징금", "고발", "수입중지",
+    "가이드라인", "지침", "고시", "행정예고", "입법예고", "민원인안내서", "공무원지침서", "약전",
+    "허가", "승인", "IND", "NDA", "BLA", "임상", "심사", "불순물", "오염", "무균", "데이터 완전성",
+    "warning letter", "form 483", "import alert", "guidance", "guideline", "regulation", "inspection", "recall",
+]
+IRRELEVANT_FOREIGN_SNIPPET_REGEX = re.compile(
+    r"(when\s+evaluating\s+your\s+system|communications\s+system|image\s+processing\s+system|parallelis(?:ing|ing)|receiving\s+images\s+over\s+spi)",
+    re.IGNORECASE,
+)
+
+def _has_regulatory_keep_signal(text: str) -> bool:
+    lower = text.lower()
+    return any(term.lower() in lower for term in REGULATORY_KEEP_TERMS)
+
+
+def _looks_like_outlet_listing(title_text: str, source_text: str = "") -> bool:
+    if not title_text:
+        return True
+    if GENERIC_AGGREGATE_TITLE_REGEX.search(title_text):
+        return True
+    compact = re.sub(r"\s+", "", re.sub(r"[-–—|·:·ㆍ]", "", title_text))
+    source_compact = re.sub(r"\s+", "", source_text)
+    for outlet in OUTLET_NAMES:
+        outlet_compact = re.sub(r"\s+", "", outlet)
+        if compact in {outlet_compact, outlet_compact * 2, f"{outlet_compact}뉴스"}:
+            return True
+        if compact.startswith(outlet_compact * 2) and len(compact) <= len(outlet_compact * 2) + 6:
+            return True
+    if source_compact and compact in {source_compact, source_compact * 2, f"{source_compact}뉴스"}:
+        return True
+    return False
+
+
+def is_excluded_notice_article(title: object = "", summary: object = "", article_text: object = "", source: object = "", rss_query: object = "", link: object = "") -> bool:
+    """경조사/인사/동정/언론사 목록형/무관 외국어 조각은 규제 모니터링 대상에서 제외한다."""
+    title_text = clean_text(title)
+    source_text = clean_text(source)
+    summary_text = clean_text(summary)
+    body_text = clean_text(article_text)
+    hay = " ".join([
+        title_text,
+        summary_text[:700],
+        body_text[:700],
+        source_text,
+        clean_text(rss_query),
+        str(link or "")[:500],
+    ])
+    if not title_text:
+        return True
+    if _looks_like_outlet_listing(title_text, source_text):
+        return True
+
+    has_keep = _has_regulatory_keep_signal(hay)
+    if NOTICE_NOISE_REGEX.search(hay):
+        return True
+    # 인사/선임/전보 등은 회사 경영기사와 충돌할 수 있어, 규제·품질·허가 신호가 전혀 없을 때만 제외한다.
+    if PERSONNEL_NOISE_REGEX.search(hay) and not has_keep:
+        return True
+
+    lower_hay = hay.lower()
+    if any(x in lower_hay for x in ["/person", "/people", "obituary", "wedding", "congrat", "condolence", "celebration", "mourning"]):
+        if not has_keep:
+            return True
+
+    # Google/RSS에 무관한 긴 영문 문서 조각이 들어온 경우 제거한다.
+    has_korean = bool(re.search(r"[가-힣]", hay))
+    if IRRELEVANT_FOREIGN_SNIPPET_REGEX.search(hay):
+        return True
+    if not has_korean and len(hay) > 120 and not has_keep:
+        return True
+    return False
 
 def ensure_data_dir(path: str | Path) -> None:
     Path(path).mkdir(parents=True, exist_ok=True)
@@ -187,7 +284,7 @@ def repair_and_reclassify(df: pd.DataFrame, force: bool = False) -> pd.DataFrame
         title = clean_title(row.get("title", ""))
         summary = clean_summary(row.get("summary", ""))
         article_text = clean_article_text(row.get("article_text", ""))
-        article_summary = clean_article_summary(row.get("article_summary", ""))
+        article_summary = ""  # 기사요약보기 폐기: 기존 캐시의 요약문도 화면/분류에 쓰지 않음
         body_fetch_status = clean_text(row.get("body_fetch_status", ""))
         source = clean_text(row.get("source", ""))
         rss_query_name = clean_text(row.get("rss_query_name", ""))
@@ -195,9 +292,11 @@ def repair_and_reclassify(df: pd.DataFrame, force: bool = False) -> pd.DataFrame
         collected_at = clean_text(row.get("collected_at", ""))
         link = recover_link_from_candidates(row)
 
-        # Existing caches may not yet have generated summaries. Create a safe 3~5 line fallback from RSS/body.
-        if not article_summary:
-            article_summary = summarize_article(title, summary, article_text, max_lines=4)
+        if is_excluded_notice_article(title, summary, article_text, source, rss_query, link):
+            continue
+
+        # 기사 요약보기 기능은 폐기했습니다. article_summary는 과거 캐시 호환을 위해 보존만 하며,
+        # 새 데이터에서는 생성하지 않습니다. 분류는 제목+RSS요약+원문본문 일부만 사용합니다.
         if not body_fetch_status:
             body_fetch_status = "본문수집성공" if article_text else "RSS요약사용"
 
@@ -220,7 +319,7 @@ def repair_and_reclassify(df: pd.DataFrame, force: bool = False) -> pd.DataFrame
             or not classification_score
         )
         if needs_cls:
-            cls = classify_article_details(title, summary, article_text=article_text, source=source, rss_query=rss_query, article_summary=article_summary)
+            cls = classify_article_details(title, summary, article_text=article_text, source=source, rss_query=rss_query, article_summary="")
             category = str(cls.get("category", "산업/경영"))
             keywords = str(cls.get("keywords", ""))
             importance = str(cls.get("importance", "일반"))
@@ -258,7 +357,7 @@ def repair_and_reclassify(df: pd.DataFrame, force: bool = False) -> pd.DataFrame
             "qa_flag": bool(qa_flag),
             "title": title,
             "summary": summary,
-            "article_summary": article_summary,
+            "article_summary": "",
             "article_text": article_text,
             "sub_tags": sub_tags,
             "classification_reason": classification_reason,
@@ -350,7 +449,6 @@ def filter_news(df: pd.DataFrame, start_date, end_date, categories: Iterable[str
         hay = (
             work["title"].fillna("").astype(str) + " " +
             work["summary"].fillna("").astype(str) + " " +
-            work.get("article_summary", pd.Series([""] * len(work))).fillna("").astype(str) + " " +
             work.get("article_text", pd.Series([""] * len(work))).fillna("").astype(str) + " " +
             work["keywords"].fillna("").astype(str) + " " +
             work.get("sub_tags", pd.Series([""] * len(work))).fillna("").astype(str) + " " +
