@@ -41,7 +41,7 @@ DATA_DIR = BASE_DIR / "data"
 CONFIG_PATH = DATA_DIR / "rss_sources.json"
 RAW_PATH = DATA_DIR / "news_raw.csv"
 CLEAN_PATH = DATA_DIR / "news_clean.csv"
-APP_VERSION = "v1.31"
+APP_VERSION = "v1.32"
 
 st.set_page_config(page_title="제약뉴스 RSS 대시보드", page_icon="📰", layout="wide", initial_sidebar_state="collapsed")
 inject_css()
@@ -948,6 +948,7 @@ elif active_tab == "keyword":
 
 elif active_tab == "radar":
     st.subheader("🛰️ 규제 레이더")
+    st.caption("허가/심사, 회수/처분, GMP 품질위험, 공식 정책/가이드라인, 해외 규제기관 업데이트 중심으로 표시합니다.")
     default_lanes = ["식약처/규제", "정책/가이드라인", "GMP/품질", "허가/임상", "해외규제", "회수/처분"]
     radar_filter = st.multiselect("레이더 표시 카테고리", default_lanes + ["약가/보험", "산업/경영"], default=default_lanes)
     radar_df = filtered_df[filtered_df["category"].isin(radar_filter)] if radar_filter else filtered_df
@@ -966,7 +967,7 @@ elif active_tab == "policy":
     with p4:
         kpi_card("약전/기준", f"{int(policy_df['policy_type'].str.contains('약전|기준', na=False).sum()) if not policy_df.empty else 0:,}건", "KP·기준규격")
 
-    section_title("정책/가이드라인 감지 기사", "")
+    section_title("공식 정책/가이드라인 감지 기사", "")
     if policy_df.empty:
         st.info("현재 조회 조건에서 정책/가이드라인성 기사가 감지되지 않았습니다.")
     else:

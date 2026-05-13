@@ -50,7 +50,7 @@ def extract_policy_articles(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame()
     work = df.copy()
-    mask = work.apply(lambda r: is_policy_article(r.get("title", ""), r.get("summary", "")) or r.get("category", "") == "정책/가이드라인", axis=1)
+    mask = work.apply(lambda r: is_policy_article(r.get("title", ""), r.get("summary", "")), axis=1)
     out = work[mask].copy()
     if out.empty:
         return out
