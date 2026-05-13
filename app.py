@@ -41,7 +41,7 @@ DATA_DIR = BASE_DIR / "data"
 CONFIG_PATH = DATA_DIR / "rss_sources.json"
 RAW_PATH = DATA_DIR / "news_raw.csv"
 CLEAN_PATH = DATA_DIR / "news_clean.csv"
-APP_VERSION = "v1.33"
+APP_VERSION = "v1.34-content-summary"
 
 st.set_page_config(page_title="제약뉴스 RSS 대시보드", page_icon="📰", layout="wide", initial_sidebar_state="collapsed")
 inject_css()
@@ -225,7 +225,7 @@ def prepare_display_df(df: pd.DataFrame) -> pd.DataFrame:
     work["published_at"] = work["published_at_dt"].dt.strftime("%Y-%m-%d %H:%M:%S").fillna("")
     work["date"] = work["published_at_dt"].dt.strftime("%Y-%m-%d").fillna("")
     work["time"] = work["published_at_dt"].dt.strftime("%H:%M").fillna("")
-    for c in ["category", "keywords", "importance", "summary", "source", "title", "link"]:
+    for c in ["category", "keywords", "importance", "summary", "article_summary", "article_text", "sub_tags", "classification_reason", "classification_score", "body_fetch_status", "source", "title", "link"]:
         if c in work.columns:
             work[c] = work[c].fillna("").astype(str).replace({"nan": "", "None": ""})
     work["category"] = work["category"].replace("", "산업/경영")
@@ -565,8 +565,8 @@ def render_table(df: pd.DataFrame, height: int = 500) -> None:
     if df.empty:
         st.info("표시할 기사 데이터가 없습니다.")
         return
-    view = df[["published_at", "source", "category", "importance", "title", "keywords", "link"]].copy()
-    view = view.rename(columns={"published_at": "발행일시", "source": "언론사", "category": "카테고리", "importance": "중요도", "title": "제목", "keywords": "키워드", "link": "원문"})
+    view = df[["published_at", "source", "category", "importance", "title", "article_summary", "sub_tags", "keywords", "link"]].copy()
+    view = view.rename(columns={"published_at": "발행일시", "source": "언론사", "category": "카테고리", "importance": "중요도", "title": "제목", "article_summary": "기사요약", "sub_tags": "다중태그", "keywords": "키워드", "link": "원문"})
     st.dataframe(
         view,
         use_container_width=True,
@@ -574,6 +574,8 @@ def render_table(df: pd.DataFrame, height: int = 500) -> None:
         column_config={
             "원문": st.column_config.LinkColumn("원문", display_text="원문 열기"),
             "제목": st.column_config.TextColumn("제목", width="large"),
+            "기사요약": st.column_config.TextColumn("기사요약", width="large"),
+            "다중태그": st.column_config.TextColumn("다중태그", width="medium"),
             "키워드": st.column_config.TextColumn("키워드", width="medium"),
             "카테고리": st.column_config.TextColumn("카테고리", width="small"),
             "중요도": st.column_config.TextColumn("중요도", width="small"),
@@ -584,14 +586,16 @@ def render_table(df: pd.DataFrame, height: int = 500) -> None:
 
 def render_kanban_card(row: pd.Series) -> str:
     keywords = [x.strip() for x in str(row.get("keywords", "")).split(",") if x.strip() and x.strip().lower() not in {"nan", "none"}][:4]
+    sub_tags = [x.strip() for x in str(row.get("sub_tags", "")).split(",") if x.strip() and x.strip().lower() not in {"nan", "none"}][:3]
     keyword_html = "".join([f"<span class='tag'>{esc(x)}</span>" for x in keywords])
+    subtag_html = "".join([f"<span class='tag' style='background:#f8fbff;color:#475569;border-color:#cbd5e1'>{esc(x)}</span>" for x in sub_tags])
     category = str(row.get("category", "산업/경영") or "산업/경영")
     color = category_palette().get(category, "#64748b")
     source = esc(row.get("source", ""))
     time_value = esc(row.get("time", ""))
     importance = esc(row.get("importance", "일반"))
-    title_html = title_with_link(row.get("title", ""), row.get("link", ""))
-    return f"<div class='news-card' style='border-left:5px solid {color};'><div class='news-meta'><span class='source-name'>{source}</span><span>{time_value}</span><span class='tag'>{importance}</span></div>{title_html}<div>{keyword_html}</div></div>"
+    title_html = title_with_link(row.get("title", ""), row.get("link", ""), row)
+    return f"<div class='news-card' style='border-left:5px solid {color};'><div class='news-meta'><span class='source-name'>{source}</span><span>{time_value}</span><span class='tag'>{importance}</span></div>{title_html}<div>{subtag_html}{keyword_html}</div></div>"
 
 
 def render_kanban(df: pd.DataFrame, lanes: List[str] | None = None) -> None:
@@ -654,6 +658,8 @@ def render_link_diagnostics(all_data: pd.DataFrame, filtered_data: pd.DataFrame)
     all_link_count = int(all_data["link"].fillna("").astype(str).str.strip().ne("").sum()) if all_count and "link" in all_data.columns else 0
     filtered_link_count = int(filtered_data["link"].fillna("").astype(str).str.strip().ne("").sum()) if filtered_count and "link" in filtered_data.columns else 0
     candidate_cols = [c for c in ["link", "url", "article_url", "google_link", "rss_link", "source_url", "article_link", "origin_link"] if all_data is not None and c in all_data.columns]
+    body_success_count = int(all_data.get("body_fetch_status", pd.Series([], dtype=str)).fillna("").astype(str).str.contains("본문수집성공", na=False).sum()) if all_count else 0
+    summary_count = int(all_data.get("article_summary", pd.Series([], dtype=str)).fillna("").astype(str).str.strip().ne("").sum()) if all_count else 0
 
     with st.expander("🔧 진단 정보 보기", expanded=False):
         st.markdown(
@@ -662,6 +668,7 @@ def render_link_diagnostics(all_data: pd.DataFrame, filtered_data: pd.DataFrame)
             - 전체 기사: **{all_count:,}건** / link 보유: **{all_link_count:,}건** / link 공란: **{max(all_count - all_link_count, 0):,}건**
             - 현재 조회 결과: **{filtered_count:,}건** / link 보유: **{filtered_link_count:,}건** / link 공란: **{max(filtered_count - filtered_link_count, 0):,}건**
             - 확인된 링크 후보 컬럼: `{', '.join(candidate_cols) if candidate_cols else '없음'}`
+            - 기사요약 생성: **{summary_count:,}건** / 원문본문 수집성공: **{body_success_count:,}건**
             """
         )
         if all_count and all_link_count == 0:
@@ -679,7 +686,7 @@ def render_importance_criteria_popover() -> None:
         with st.popover("ⓘ 중요도 기준", use_container_width=True):
             st.markdown(
                 """
-                **현재 중요도는 제목·RSS 요약 키워드 기반 선별 보조값입니다.**
+                **현재 중요도는 제목·RSS 요약·원문 본문 일부를 함께 보는 내용 기반 자동분류 보조값입니다.**
 
                 - **높음**: 회수, 폐기, 리콜, 행정처분, 판매중지, 품목취소, 영업정지, 부적합, 위해성, 불순물, 오염 등 직접 조치성·품질위험 키워드 포함
                 - **중간**: 식약처/규제, 정책/가이드라인, GMP/품질, 해외규제 또는 FDA·EMA·실태조사·데이터완전성 등 QA/규제 관련 키워드 포함
@@ -688,7 +695,7 @@ def render_importance_criteria_popover() -> None:
             )
     else:
         with st.expander("ⓘ 중요도 기준"):
-            st.markdown("높음/중간/일반 기준은 제목·요약 키워드 기반 자동분류입니다.")
+            st.markdown("높음/중간/일반 기준은 제목·RSS요약·원문본문 일부 기반 자동분류입니다.")
 
 
 def render_collect_scope_popover() -> None:
@@ -701,6 +708,7 @@ def render_collect_scope_popover() -> None:
                 - 단, Google News RSS는 공식 API가 아니므로 결과 누락 또는 정렬 차이가 있을 수 있습니다.
                 - 각 검색식당 최대 수집 건수도 함께 제한합니다.
                 - Supabase 설정 시 최근 30일 기사 메타데이터를 보관하고, 앱 첫 화면은 최근 7일만 우선 로드합니다.
+                - v1.34부터 수집 단계에서 원문 본문 일부를 가능한 범위로 읽고, 기사별 3~5줄 요약과 내용 기반 분류근거를 저장합니다.
                 """
             )
     else:
@@ -712,7 +720,7 @@ def render_policy_card(row: pd.Series) -> None:
     source = esc(row.get("source", ""))
     published = esc(row.get("published_at", ""))
     ptype = esc(row.get("policy_type", "정책/가이드라인"))
-    title_html = title_with_link(row.get("title", ""), row.get("link", ""))
+    title_html = title_with_link(row.get("title", ""), row.get("link", ""), row, show_reason=True)
     html = f"<div class='policy-box wide'><div class='news-meta'><span class='source-name'>{source}</span><span>{published}</span><span class='tag'>{ptype}</span></div>{title_html}</div>"
     st.markdown(html, unsafe_allow_html=True)
 

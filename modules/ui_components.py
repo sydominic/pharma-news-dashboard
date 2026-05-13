@@ -44,9 +44,16 @@ def inject_css() -> None:
         .news-title-row .news-title { width:100%; min-width:0; }
         .title-link { color:#0b213d !important; text-decoration:none; }
         .title-link:hover { color:#0065d8 !important; text-decoration:underline; }
-        .link-row { display:flex; align-items:center; gap:8px; margin:6px 0 9px; }
+        .link-row { display:flex; align-items:center; gap:8px; margin:6px 0 9px; flex-wrap:wrap; }
         .icon-link { display:inline-flex; align-items:center; justify-content:center; min-width:92px; height:34px; padding:0 13px; border-radius:999px; border:1px solid #8db9ee; background:#eaf3ff; color:#005ec7 !important; font-weight:900; text-decoration:none !important; font-size:13px; white-space:nowrap; box-shadow:0 4px 10px rgba(0,101,216,0.10); }
         .icon-link:hover { background:#0065d8; color:#fff !important; border-color:#0065d8; }
+        .summary-toggle { display:inline-block; position:relative; }
+        .summary-toggle summary { display:inline-flex; align-items:center; justify-content:center; min-width:112px; height:34px; padding:0 13px; border-radius:999px; border:1px solid #b8c7da; background:#f8fbff; color:#0b3b6d; font-weight:900; font-size:13px; cursor:pointer; list-style:none; box-shadow:0 4px 10px rgba(8,31,63,0.06); }
+        .summary-toggle summary::-webkit-details-marker { display:none; }
+        .summary-toggle[open] summary { background:#081f3f; color:#fff; border-color:#081f3f; }
+        .summary-panel { margin:8px 0 6px; padding:12px 14px; border-radius:14px; background:#f8fbff; border:1px solid #d7e7fb; color:#1f334a; font-size:13px; line-height:1.65; white-space:pre-line; min-width:min(760px,100%); }
+        .summary-status { display:inline-block; margin-top:7px; color:#64748b; font-size:11px; font-weight:800; }
+        .classification-reason { margin-top:8px; padding:8px 10px; border-radius:12px; background:#fff; border:1px dashed #c8d8eb; color:#49627d; font-size:12px; line-height:1.5; }
         .missing-link { display:inline-flex; align-items:center; justify-content:center; min-width:82px; height:30px; padding:0 12px; border-radius:999px; border:1px solid #d7e1ee; background:#f2f5f9; color:#7a8796; font-weight:900; font-size:12px; }
         .news-summary { color:#54657b; font-size:13px; line-height:1.55; margin-bottom:10px; }
         .tag { display:inline-flex; align-items:center; border-radius:999px; padding:4px 8px; font-size:11px; font-weight:800; border:1px solid rgba(0,0,0,0.08); background:#eef6ff; color:#0065d8; margin-right:4px; margin-bottom:4px; }
@@ -141,13 +148,30 @@ def importance_tag(importance: str) -> str:
     return f"<span class='tag {cls}'>중요도 {importance}</span>"
 
 
-def title_with_link(title: object, link: object) -> str:
+def _summary_details_html(row: pd.Series, show_reason: bool = False) -> str:
+    summary = esc(row.get("article_summary", "")) or esc(row.get("summary", ""))
+    status = esc(row.get("body_fetch_status", ""))
+    reason = esc(row.get("classification_reason", "")) if show_reason else ""
+    if not summary:
+        return ""
+    reason_html = f"<div class='classification-reason'>분류근거: {reason}</div>" if reason else ""
+    status_html = f"<span class='summary-status'>{status}</span>" if status else ""
+    return (
+        "<details class='summary-toggle'>"
+        "<summary>기사 요약 보기</summary>"
+        f"<div class='summary-panel'>{summary}{reason_html}{status_html}</div>"
+        "</details>"
+    )
+
+
+def title_with_link(title: object, link: object, row: pd.Series | None = None, show_reason: bool = False) -> str:
     safe_title = esc(title)
     safe_link = esc(link)
     title_html = f"<div class='news-title-row'><div class='news-title'>{safe_title}</div></div>"
+    summary_html = _summary_details_html(row, show_reason=show_reason) if row is not None else ""
     if safe_link:
-        return title_html + f"<div class='link-row'><a class='icon-link' href='{safe_link}' target='_blank' rel='noopener noreferrer' title='원문 열기'>원문 열기 ↗</a></div>"
-    return title_html + "<div class='link-row'><span class='missing-link'>링크 없음</span></div>"
+        return title_html + f"<div class='link-row'><a class='icon-link' href='{safe_link}' target='_blank' rel='noopener noreferrer' title='원문 열기'>원문 열기 ↗</a>{summary_html}</div>"
+    return title_html + f"<div class='link-row'><span class='missing-link'>링크 없음</span>{summary_html}</div>"
 
 
 def article_card(row: pd.Series, show_summary: bool = True) -> None:
@@ -157,10 +181,12 @@ def article_card(row: pd.Series, show_summary: bool = True) -> None:
     category = row.get("category", "산업/경영")
     importance = row.get("importance", "일반")
     keywords = [x.strip() for x in str(row.get("keywords", "")).split(",") if x.strip() and x.strip().lower() not in {"nan", "none"}][:5]
+    sub_tags = [x.strip() for x in str(row.get("sub_tags", "")).split(",") if x.strip() and x.strip().lower() not in {"nan", "none"}][:3]
     keyword_html = "".join([f"<span class='tag'>{esc(x)}</span>" for x in keywords])
+    subtag_html = "".join([f"<span class='tag' style='background:#f8fbff;color:#475569;border-color:#cbd5e1'>{esc(x)}</span>" for x in sub_tags])
     summary_html = f"<div class='news-summary'>{summary[:180]}</div>" if show_summary and summary else ""
-    title_html = title_with_link(row.get("title", ""), row.get("link", ""))
-    html_block = f"<div class='news-card'><div class='news-meta'><span class='source-name'>{source}</span><span>{published}</span>{category_tag(category)}{importance_tag(importance)}</div>{title_html}{summary_html}<div>{keyword_html}</div></div>"
+    title_html = title_with_link(row.get("title", ""), row.get("link", ""), row)
+    html_block = f"<div class='news-card'><div class='news-meta'><span class='source-name'>{source}</span><span>{published}</span>{category_tag(category)}{importance_tag(importance)}</div>{title_html}{summary_html}<div>{subtag_html}{keyword_html}</div></div>"
     st.markdown(html_block, unsafe_allow_html=True)
 
 
@@ -171,9 +197,11 @@ def timeline_item(row: pd.Series) -> None:
     category = row.get("category", "산업/경영")
     importance = row.get("importance", "일반")
     keywords = [x.strip() for x in str(row.get("keywords", "")).split(",") if x.strip() and x.strip().lower() not in {"nan", "none"}][:5]
+    sub_tags = [x.strip() for x in str(row.get("sub_tags", "")).split(",") if x.strip() and x.strip().lower() not in {"nan", "none"}][:3]
     keyword_html = "".join([f"<span class='tag'>{esc(x)}</span>" for x in keywords])
-    title_html = title_with_link(row.get("title", ""), row.get("link", ""))
-    card = f"<div class='news-card'><div class='news-meta'><span class='source-name'>{source}</span><span>{published}</span>{category_tag(category)}{importance_tag(importance)}</div>{title_html}<div>{keyword_html}</div></div>"
+    subtag_html = "".join([f"<span class='tag' style='background:#f8fbff;color:#475569;border-color:#cbd5e1'>{esc(x)}</span>" for x in sub_tags])
+    title_html = title_with_link(row.get("title", ""), row.get("link", ""), row)
+    card = f"<div class='news-card'><div class='news-meta'><span class='source-name'>{source}</span><span>{published}</span>{category_tag(category)}{importance_tag(importance)}</div>{title_html}<div>{subtag_html}{keyword_html}</div></div>"
     html_block = f"<div class='timeline-row'><div class='timeline-time'>{time}</div><div class='timeline-pin'></div>{card}</div>"
     st.markdown(html_block, unsafe_allow_html=True)
 

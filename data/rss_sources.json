@@ -5,7 +5,11 @@
     "ceid": "KR:ko",
     "max_items_per_query": 100,
     "timeout_sec": 12,
-    "resolve_google_redirect": false
+    "resolve_google_redirect": false,
+    "fetch_article_body": true,
+    "article_body_timeout_sec": 4,
+    "article_body_max_chars": 6000,
+    "max_body_fetch_per_run": 50
   },
   "queries": [
     {

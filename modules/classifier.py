@@ -3,76 +3,91 @@ from __future__ import annotations
 import re
 from typing import Dict, List, Tuple
 
-# v1.32: stricter regulatory classification.
-# The purpose is to reduce broad industry/general news from Regulatory Radar and Policy tabs.
+# v1.34/v28: content-aware unified classification.
+# Classification now uses title + RSS summary + fetched article body/article summary + source/query when available.
+# All dashboard categories are scored by one engine, then converted to multi-tags + one representative category.
 
-MFDS_TERMS = ["식약처", "식품의약품안전처", "MFDS", "의약품안전나라"]
-OVERSEAS_REGULATORS = [
-    "FDA", "USFDA", "EMA", "European Medicines Agency", "European Commission", "EC", "EudraLex",
-    "PIC/S", "PICS", "ICH", "PMDA", "EDQM", "WHO", "CHMP", "MHRA", "Health Canada", "TGA"
+MFDS_TERMS = [
+    "식약처", "식품의약품안전처", "MFDS", "의약품안전나라", "마약류통합관리시스템",
 ]
-DOMESTIC_REGULATORS = MFDS_TERMS + ["보건복지부", "복지부", "심평원", "건강보험심사평가원"]
+OVERSEAS_REGULATORS = [
+    "FDA", "USFDA", "미 FDA", "미국 FDA", "미국 식품의약국", "식품의약국",
+    "EMA", "유럽의약품청", "유럽 의약품청", "European Medicines Agency",
+    "European Commission", "유럽 집행위", "EU 집행위", "EC", "EudraLex",
+    "PIC/S", "PICS", "PICs", "의약품실사상호협력기구",
+    "ICH", "국제의약품규제조화위원회",
+    "PMDA", "일본 PMDA", "일본 의약품의료기기종합기구",
+    "EDQM", "유럽의약품품질위원회", "Ph. Eur", "Ph.Eur",
+    "WHO", "세계보건기구", "CHMP", "MHRA", "영국 의약품규제청", "Health Canada", "캐나다 보건부", "TGA",
+]
+DOMESTIC_REGULATORS = MFDS_TERMS + ["보건복지부", "복지부", "심평원", "건강보험심사평가원", "질병관리청"]
 REGULATOR_KEYWORDS = DOMESTIC_REGULATORS + OVERSEAS_REGULATORS
 
 POLICY_ACTION_KEYWORDS = [
     "가이드라인", "가이드", "guidance", "guideline", "draft guidance", "final guidance",
-    "민원인안내서", "민원인 안내서", "공무원지침서", "공무원 지침서", "안내서", "지침", "해설서", "질의응답", "Q&A", "qa",
-    "행정예고", "입법예고", "예고", "고시", "훈령", "예규", "규정", "공고",
-    "제정", "개정", "일부개정", "전부개정", "시행", "시행령", "시행규칙",
+    "민원인안내서", "민원인 안내서", "공무원지침서", "공무원 지침서", "안내서", "지침", "해설서", "질의응답", "Q&A",
+    "행정예고", "입법예고", "예고", "고시", "훈령", "예규", "규정", "공고", "공식문서", "공식 문서",
+    "제정", "개정", "일부개정", "전부개정", "시행", "시행령", "시행규칙", "법령", "약사법",
     "대한민국약전", "약전", "KP", "Ph. Eur", "Ph.Eur", "USP", "기준규격", "기준 규격", "시험법",
-    "EudraLex", "reflection paper", "concept paper", "Q&A", "notice", "notification", "update", "revision", "revised",
+    "reflection paper", "concept paper", "consultation", "notice", "notification", "update", "revision", "revised",
 ]
-
-# 식약처/규제에 잡혔지만 정책 탭에서 빠지기 쉬운 '정책 변화/제도 개선'형 표현.
-# 단독으로는 너무 넓으므로 MFDS 등 규제기관명과 같이 있을 때만 정책성으로 인정한다.
 POLICY_CHANGE_KEYWORDS = [
     "정책변화", "정책 변화", "정책추가", "정책 추가", "제도개선", "제도 개선", "개선방안", "개선 방안",
-    "혁신방안", "혁신 방안", "의견수렴", "의견 수렴", "시범사업", "로드맵",
-    "허가·심사", "허가 심사", "허가심사", "심사 속도", "신속심사", "규제개선", "규제 개선",
+    "혁신방안", "혁신 방안", "의견수렴", "의견 수렴", "시범사업", "로드맵", "규제혁신", "규제 혁신",
+    "허가·심사", "허가 심사", "허가심사", "심사 속도", "신속심사", "규제개선", "규제 개선", "심사기준", "심사 기준",
 ]
-
 POLICY_GUIDE_KEYWORDS = POLICY_ACTION_KEYWORDS + POLICY_CHANGE_KEYWORDS
 
 RECALL_KEYWORDS = [
     "회수", "회수·폐기", "회수폐기", "폐기", "리콜", "recall", "행정처분", "판매중지", "판매 중지",
-    "품목취소", "허가취소", "영업정지", "잠정 중지", "잠정중지", "사용중지", "처분",
+    "품목취소", "허가취소", "영업정지", "잠정 중지", "잠정중지", "사용중지", "처분", "수입중지", "수입 중지",
 ]
 RECALL_RISK_KEYWORDS = [
-    "부적합", "위해성", "안전성 서한", "검출", "이물", "불순물", "오염", "품질부적합", "NDMA", "NDSRI", "트라마돌"
+    "부적합", "위해성", "안전성 서한", "안전성 정보", "검출", "이물", "불순물", "오염", "품질부적합",
+    "NDMA", "NDSRI", "니트로사민", "트라마돌", "부작용", "이상사례", "adverse event", "safety communication",
 ]
 
 APPROVAL_KEYWORDS = [
-    "허가", "품목허가", "허가변경", "허가심사", "허가·심사", "신약 허가", "승인", "승인권고", "심사", "사전상담",
-    "IND", "NDA", "BLA", "임상", "임상시험", "1상", "2상", "3상", "임상1상", "임상2상", "임상3상",
-    "적응증", "투여", "바이오시밀러", "치료제", "후보물질", "파이프라인"
+    "허가", "품목허가", "허가변경", "허가 변경", "허가심사", "허가·심사", "신약 허가", "승인", "승인권고", "심사", "사전상담",
+    "IND", "NDA", "BLA", "MAA", "임상", "임상시험", "1상", "2상", "3상", "임상1상", "임상2상", "임상3상",
+    "적응증", "투여", "바이오시밀러", "치료제", "후보물질", "파이프라인", "희귀의약품", "패스트트랙", "우선심사", "신속심사",
 ]
 
-GMP_CORE_KEYWORDS = ["GMP", "cGMP", "PIC/S", "PICS", "제조소", "제조업체", "제조·품질", "제조 품질", "실태조사", "실사", "inspection", "audit"]
+GMP_CORE_KEYWORDS = [
+    "GMP", "cGMP", "KGMP", "PIC/S", "PICS", "제조소", "제조업체", "제조시설", "제조 시설", "제조·품질", "제조 품질",
+    "제조관리", "품질관리", "실태조사", "실사", "점검", "inspection", "audit", "GMP non-compliance",
+]
 GMP_RISK_KEYWORDS = [
-    "데이터완전성", "data integrity", "무균", "sterile", "aseptic", "오염", "교차오염", "불순물", "이물",
-    "일탈", "deviation", "CAPA", "부적합", "품질부적합", "제조기록", "시험기록", "시험검사",
-    "warning letter", "Warning Letter", "483", "Form 483", "import alert", "recall", "품질관리", "제조관리", "밸리데이션", "validation",
+    "데이터완전성", "데이터 완전성", "data integrity", "무균", "sterile", "sterility", "aseptic", "오염", "교차오염", "불순물", "이물",
+    "일탈", "deviation", "CAPA", "OOS", "OOT", "부적합", "품질부적합", "품질 결함", "quality defect",
+    "제조기록", "제조 기록", "시험기록", "시험 기록", "시험검사", "밸리데이션", "validation",
+    "warning letter", "Warning Letter", "483", "Form 483", "import alert", "recall", "compliance", "보완", "시정", "재발방지",
 ]
 
 MFDS_REG_ACTION_KEYWORDS = [
     "점검", "실태조사", "감시", "약사법", "품목갱신", "허가·심사", "허가 심사", "민원", "기준", "규정",
-    "안전관리", "관리기준", "사전상담", "심사", "제도", "정책", "개선방안", "혁신방안", "공고"
+    "안전관리", "관리기준", "사전상담", "심사", "제도", "정책", "개선방안", "혁신방안", "공고", "고시", "행정예고",
+    "회수", "행정처분", "허가", "품목허가", "수입", "수출", "원료의약품", "완제의약품",
 ]
 
 OVERSEAS_REG_ACTION_KEYWORDS = [
     "guidance", "guideline", "draft guidance", "final guidance", "warning letter", "Warning Letter", "483", "Form 483",
-    "import alert", "inspection", "compliance", "regulation", "regulatory", "EudraLex", "CHMP", "recommend", "approval",
-    "승인", "승인권고", "가이드라인", "지침", "개정", "업데이트", "공개", "발표", "규제", "점검", "실사"
+    "import alert", "inspection", "compliance", "regulation", "regulatory", "EudraLex", "CHMP", "recommend", "GMP non-compliance",
+    "승인", "승인권고", "가이드라인", "지침", "개정", "업데이트", "공개", "발표", "규제", "점검", "실사", "심사", "허가", "정책", "규정",
 ]
 
 REIMBURSEMENT_KEYWORDS = [
-    "약가", "급여", "보험", "심평원", "건보", "건강보험", "등재", "상한금액", "수가", "급여기준", "약평위", "보험약가"
+    "약가", "급여", "보험", "심평원", "건보", "건강보험", "등재", "상한금액", "수가", "급여기준", "약평위", "보험약가", "선별급여",
+]
+
+SUPPLY_API_KEYWORDS = [
+    "원료", "원료의약품", "API", "공급망", "공급", "수급", "품절", "부족", "위탁", "수탁", "CMO", "CDMO", "위탁생산", "생산설비", "공장",
 ]
 
 INDUSTRY_KEYWORDS = [
     "투자", "매출", "영업이익", "계약", "기술수출", "라이선스", "인수", "합병", "MOU", "파트너십", "공장",
     "생산", "CDMO", "위탁생산", "공급", "시장", "상장", "실적", "수출", "R&D", "연구개발", "개발",
-    "사업", "공개", "발표", "확대", "성장", "경쟁", "도입", "협약", "선정", "진출", "제약", "바이오",
+    "사업", "공개", "발표", "확대", "성장", "경쟁", "도입", "협약", "선정", "진출", "제약", "바이오", "주가", "IR",
 ]
 
 CATEGORY_ORDER = [
@@ -86,32 +101,49 @@ CATEGORY_ORDER = [
     "산업/경영",
 ]
 
+# Tie-breaker. GMP/품질, 회수/처분은 품질시스템 관점에서 더 중요한 신호로 우선합니다.
+REPRESENTATIVE_PRIORITY = [
+    "회수/처분",
+    "GMP/품질",
+    "정책/가이드라인",
+    "식약처/규제",
+    "허가/임상",
+    "해외규제",
+    "약가/보험",
+    "산업/경영",
+]
+
 CATEGORY_KEYWORDS: Dict[str, List[str]] = {
     "회수/처분": RECALL_KEYWORDS + RECALL_RISK_KEYWORDS,
-    "정책/가이드라인": POLICY_ACTION_KEYWORDS + REGULATOR_KEYWORDS,
+    "정책/가이드라인": POLICY_GUIDE_KEYWORDS + REGULATOR_KEYWORDS,
     "식약처/규제": MFDS_TERMS + MFDS_REG_ACTION_KEYWORDS,
     "GMP/품질": GMP_CORE_KEYWORDS + GMP_RISK_KEYWORDS,
     "허가/임상": APPROVAL_KEYWORDS,
     "해외규제": OVERSEAS_REGULATORS + OVERSEAS_REG_ACTION_KEYWORDS,
     "약가/보험": REIMBURSEMENT_KEYWORDS,
-    "산업/경영": INDUSTRY_KEYWORDS,
+    "산업/경영": INDUSTRY_KEYWORDS + SUPPLY_API_KEYWORDS,
 }
 
 IMPORTANT_KEYWORDS = (
     RECALL_KEYWORDS + RECALL_RISK_KEYWORDS + GMP_CORE_KEYWORDS + GMP_RISK_KEYWORDS +
-    POLICY_ACTION_KEYWORDS + REGULATOR_KEYWORDS
+    POLICY_GUIDE_KEYWORDS + REGULATOR_KEYWORDS + OVERSEAS_REG_ACTION_KEYWORDS
 )
 
 TREND_KEYWORDS = [
-    "식약처", "GMP", "허가", "임상", "회수", "행정처분", "FDA", "EMA", "PMDA", "품질", "데이터완전성",
+    "식약처", "GMP", "KGMP", "허가", "임상", "회수", "행정처분", "FDA", "EMA", "PMDA", "품질", "데이터완전성",
     "무균", "바이오시밀러", "신약", "기술수출", "CDMO", "약가", "급여", "투자", "공장", "수출",
     "불순물", "오염", "밸리데이션", "PIC/S", "ICH", "R&D", "제약", "바이오", "글로벌", "공급망", "치료제",
-    "가이드라인", "안내서", "행정예고", "고시", "약전", "제도개선", "입법예고"
+    "가이드라인", "안내서", "행정예고", "고시", "약전", "제도개선", "입법예고", "Warning Letter", "Form 483", "수입경보",
 ]
 
 PHARMA_FALLBACK_WORDS = [
     "제약", "바이오", "의약", "의료제품", "약국", "약사", "병원", "신약", "치료제", "항암", "백신", "면역", "희귀질환",
-    "임상", "허가", "품목", "복지부", "식약처", "셀트리온", "삼성바이오", "한올", "대웅", "유한양행", "종근당"
+    "임상", "허가", "품목", "복지부", "식약처", "셀트리온", "삼성바이오", "한올", "대웅", "유한양행", "종근당",
+]
+
+CLINICAL_APPROVAL_EXCLUSION_FOR_POLICY = [
+    "IND 승인", "1상 IND", "임상 1상", "임상1상", "임상 2상", "임상2상", "임상 3상", "임상3상",
+    "품목허가", "허가신청", "허가 신청", "승인 기대", "승인 획득", "시판허가", "적응증 확대",
 ]
 
 
@@ -134,54 +166,83 @@ def _has_any(text: str, keywords: List[str]) -> bool:
     return any(_keyword_hit(text, kw) for kw in keywords)
 
 
-def is_mfds_policy_article(title: str, summary: str = "") -> bool:
-    text = f"{normalize_text(title)} {normalize_text(summary)}"
+def _match_keywords(text: str, keywords: List[str], limit: int | None = None) -> List[str]:
+    hits: List[str] = []
+    for kw in keywords:
+        if kw and kw not in hits and _keyword_hit(text, kw):
+            hits.append(kw)
+            if limit and len(hits) >= limit:
+                break
+    return hits
+
+
+def _combined_text(title: str = "", summary: str = "", article_text: str = "", source: str = "", rss_query: str = "", article_summary: str = "") -> str:
+    return " ".join([
+        normalize_text(title),
+        normalize_text(summary),
+        normalize_text(article_summary),
+        normalize_text(article_text),
+        normalize_text(source),
+        normalize_text(rss_query),
+    ]).strip()
+
+
+def is_mfds_policy_article(title: str, summary: str = "", article_text: str = "") -> bool:
+    text = _combined_text(title, summary, article_text)
     return _has_any(text, MFDS_TERMS) and _has_any(text, POLICY_ACTION_KEYWORDS + POLICY_CHANGE_KEYWORDS)
 
 
-def is_overseas_policy_article(title: str, summary: str = "") -> bool:
-    text = f"{normalize_text(title)} {normalize_text(summary)}"
-    return _has_any(text, OVERSEAS_REGULATORS) and _has_any(text, POLICY_ACTION_KEYWORDS + OVERSEAS_REG_ACTION_KEYWORDS)
+def is_overseas_policy_article(title: str, summary: str = "", article_text: str = "") -> bool:
+    text = _combined_text(title, summary, article_text)
+    if not (_has_any(text, OVERSEAS_REGULATORS) and _has_any(text, POLICY_ACTION_KEYWORDS + POLICY_CHANGE_KEYWORDS)):
+        return False
+    # FDA/EMA words in approval/clinical pipeline articles should not be policy/guideline unless policy terms also appear.
+    if _has_any(text, CLINICAL_APPROVAL_EXCLUSION_FOR_POLICY) and not _has_any(text, ["guidance", "guideline", "가이드라인", "지침", "규정", "regulation", "EudraLex", "draft guidance"]):
+        return False
+    return True
 
 
-def is_policy_article(title: str, summary: str = "") -> bool:
-    # v1.32 stricter rule: regulator/official body + policy/guidance action must coexist.
-    return is_mfds_policy_article(title, summary) or is_overseas_policy_article(title, summary)
+def is_policy_article(title: str, summary: str = "", article_text: str = "") -> bool:
+    return is_mfds_policy_article(title, summary, article_text) or is_overseas_policy_article(title, summary, article_text)
 
 
-def is_gmp_quality_risk(title: str, summary: str = "") -> bool:
-    text = f"{normalize_text(title)} {normalize_text(summary)}"
-    # Do not classify as GMP/quality only because generic words like 품질/제조 appear.
-    return _has_any(text, GMP_RISK_KEYWORDS) or (_has_any(text, GMP_CORE_KEYWORDS) and _has_any(text, ["점검", "실사", "위반", "부적합", "오염", "불순물", "Warning Letter", "483", "import alert"]))
+def is_gmp_quality_risk(title: str, summary: str = "", article_text: str = "") -> bool:
+    text = _combined_text(title, summary, article_text)
+    # 품질/제조 같은 일반어 단독은 제외하고, 위험·실사·위반·GMP 맥락이 함께 있을 때 인정합니다.
+    if _has_any(text, GMP_RISK_KEYWORDS):
+        return True
+    return _has_any(text, GMP_CORE_KEYWORDS) and _has_any(text, [
+        "점검", "실사", "위반", "부적합", "오염", "불순물", "무균", "데이터", "Warning Letter", "483", "import alert", "회수", "품질",
+    ])
 
 
-def is_overseas_regulatory(title: str, summary: str = "") -> bool:
-    text = f"{normalize_text(title)} {normalize_text(summary)}"
-    return _has_any(text, OVERSEAS_REGULATORS) and _has_any(text, OVERSEAS_REG_ACTION_KEYWORDS + POLICY_ACTION_KEYWORDS)
+def is_overseas_regulatory(title: str, summary: str = "", article_text: str = "") -> bool:
+    text = _combined_text(title, summary, article_text)
+    return _has_any(text, OVERSEAS_REGULATORS) and _has_any(text, OVERSEAS_REG_ACTION_KEYWORDS + POLICY_ACTION_KEYWORDS + GMP_RISK_KEYWORDS + APPROVAL_KEYWORDS)
 
 
-def is_mfds_regulatory(title: str, summary: str = "") -> bool:
-    text = f"{normalize_text(title)} {normalize_text(summary)}"
-    return _has_any(text, MFDS_TERMS) and _has_any(text, MFDS_REG_ACTION_KEYWORDS + APPROVAL_KEYWORDS + RECALL_KEYWORDS + POLICY_ACTION_KEYWORDS)
+def is_mfds_regulatory(title: str, summary: str = "", article_text: str = "") -> bool:
+    text = _combined_text(title, summary, article_text)
+    return _has_any(text, MFDS_TERMS) and _has_any(text, MFDS_REG_ACTION_KEYWORDS + APPROVAL_KEYWORDS + RECALL_KEYWORDS + POLICY_ACTION_KEYWORDS + GMP_RISK_KEYWORDS)
 
 
-def policy_type(title: str, summary: str = "") -> str:
-    text = f"{normalize_text(title)} {normalize_text(summary)}"
-    if _has_any(text, ["FDA", "USFDA"]) and _has_any(text, ["guidance", "guideline", "draft guidance", "final guidance", "가이드라인", "지침"]):
+def policy_type(title: str, summary: str = "", article_text: str = "") -> str:
+    text = _combined_text(title, summary, article_text)
+    if _has_any(text, ["FDA", "USFDA", "미 FDA", "미국 FDA"]) and _has_any(text, ["guidance", "guideline", "draft guidance", "final guidance", "가이드라인", "지침"]):
         return "FDA Guidance"
-    if _has_any(text, ["European Commission", "EudraLex", "EC", "EMA"]) and _has_any(text, ["EudraLex", "guideline", "guidance", "가이드라인", "개정", "update"]):
+    if _has_any(text, ["European Commission", "유럽 집행위", "EudraLex", "EC", "EMA", "유럽의약품청"]) and _has_any(text, ["EudraLex", "guideline", "guidance", "가이드라인", "개정", "update", "regulation"]):
         return "EC/EMA Guideline"
-    if _has_any(text, ["PIC/S", "PICS"]):
+    if _has_any(text, ["PIC/S", "PICS", "의약품실사상호협력기구"]):
         return "PIC/S GMP Guide"
-    if _has_any(text, ["ICH"]):
+    if _has_any(text, ["ICH", "국제의약품규제조화위원회"]):
         return "ICH Guideline"
-    if _has_any(text, ["PMDA"]):
+    if _has_any(text, ["PMDA", "일본 PMDA"]):
         return "PMDA Guideline/Notification"
-    if _has_any(text, ["EDQM", "Ph. Eur", "Ph.Eur"]):
+    if _has_any(text, ["EDQM", "Ph. Eur", "Ph.Eur", "유럽의약품품질위원회"]):
         return "EDQM/Ph. Eur."
     if _has_any(text, ["개선방안", "혁신방안", "제도개선", "의견수렴", "허가·심사", "허가 심사", "허가심사", "신속심사", "규제개선"]):
         return "MFDS 허가심사/제도개선"
-    if _has_any(text, ["민원인안내서", "민원인 안내서", "안내서", "해설서", "질의응답", "Q&A", "qa"]):
+    if _has_any(text, ["민원인안내서", "민원인 안내서", "안내서", "해설서", "질의응답", "Q&A"]):
         return "MFDS 민원인안내서/해설서"
     if _has_any(text, ["공무원지침서", "공무원 지침서", "지침", "심사지침"]):
         return "MFDS 공무원지침서/지침"
@@ -194,57 +255,130 @@ def policy_type(title: str, summary: str = "") -> str:
     return "공식 정책/가이드라인"
 
 
-def score_categories(title: str, summary: str = "") -> Dict[str, int]:
-    text = f"{normalize_text(title)} {normalize_text(summary)}"
-    scores: Dict[str, int] = {cat: 0 for cat in CATEGORY_ORDER}
-    for category, keywords in CATEGORY_KEYWORDS.items():
-        scores[category] = sum(1 for kw in keywords if _keyword_hit(text, kw))
+def _weighted_hits(title: str, summary: str, article_text: str, source: str, rss_query: str, article_summary: str, keywords: List[str]) -> tuple[int, List[str]]:
+    title_text = normalize_text(title)
+    summary_text = " ".join([normalize_text(summary), normalize_text(article_summary)])
+    body_text = " ".join([normalize_text(article_text), normalize_text(source), normalize_text(rss_query)])
+    title_hits = _match_keywords(title_text, keywords)
+    summary_hits = _match_keywords(summary_text, keywords)
+    body_hits = _match_keywords(body_text, keywords)
+    hits: List[str] = []
+    for kw in title_hits + summary_hits + body_hits:
+        if kw not in hits:
+            hits.append(kw)
+    score = len(title_hits) * 3 + len(summary_hits) * 2 + len(body_hits)
+    return score, hits
 
-    # Strict boosts/gates
-    if _has_any(text, RECALL_KEYWORDS) or (_has_any(text, RECALL_RISK_KEYWORDS) and _has_any(text, ["회수", "처분", "판매중지", "식약처", "FDA", "부적합"])):
-        scores["회수/처분"] += 8
-    if is_policy_article(title, summary):
-        scores["정책/가이드라인"] += 10
+
+def score_categories(title: str, summary: str = "", article_text: str = "", source: str = "", rss_query: str = "", article_summary: str = "") -> Dict[str, int]:
+    text = _combined_text(title, summary, article_text, source, rss_query, article_summary)
+    scores: Dict[str, int] = {cat: 0 for cat in CATEGORY_ORDER}
+    raw_hits: Dict[str, List[str]] = {}
+    for category, keywords in CATEGORY_KEYWORDS.items():
+        score, hits = _weighted_hits(title, summary, article_text, source, rss_query, article_summary, keywords)
+        scores[category] = score
+        raw_hits[category] = hits
+
+    # Gates and boosts. Broad categories are suppressed unless the article context supports them.
+    if _has_any(text, RECALL_KEYWORDS) or (_has_any(text, RECALL_RISK_KEYWORDS) and _has_any(text, ["회수", "처분", "판매중지", "품목취소", "영업정지", "부적합", "리콜", "폐기"])):
+        scores["회수/처분"] += 10
     else:
-        # prevent generic policy words from dominating
+        scores["회수/처분"] = 0
+
+    if is_policy_article(title, summary, article_text):
+        scores["정책/가이드라인"] += 9
+    else:
         scores["정책/가이드라인"] = 0
-    if is_mfds_regulatory(title, summary):
-        scores["식약처/규제"] += 5
+
+    if is_mfds_regulatory(title, summary, article_text):
+        scores["식약처/규제"] += 7
     else:
         scores["식약처/규제"] = 0
-    if is_gmp_quality_risk(title, summary):
-        scores["GMP/품질"] += 7
+
+    if is_gmp_quality_risk(title, summary, article_text):
+        scores["GMP/품질"] += 9
     else:
         scores["GMP/품질"] = 0
-    if is_overseas_regulatory(title, summary):
+
+    if is_overseas_regulatory(title, summary, article_text):
         scores["해외규제"] += 6
     else:
         scores["해외규제"] = 0
+
     if _has_any(text, APPROVAL_KEYWORDS):
-        scores["허가/임상"] += 4
+        scores["허가/임상"] += 6
+    else:
+        scores["허가/임상"] = 0
+
     if _has_any(text, REIMBURSEMENT_KEYWORDS):
-        scores["약가/보험"] += 4
-    return scores
+        scores["약가/보험"] += 7
+    else:
+        scores["약가/보험"] = 0
+
+    # Industry is fallback: keep it but don't let it overpower stronger QA/regulatory categories.
+    if not _has_any(text, INDUSTRY_KEYWORDS + SUPPLY_API_KEYWORDS + PHARMA_FALLBACK_WORDS):
+        scores["산업/경영"] = 0
+    else:
+        scores["산업/경영"] = min(scores.get("산업/경영", 0) + 2, 8)
+
+    # FDA/EMA IND approval류는 정책/가이드라인이 아니라 허가/임상 쪽을 우선합니다.
+    if _has_any(text, OVERSEAS_REGULATORS) and _has_any(text, CLINICAL_APPROVAL_EXCLUSION_FOR_POLICY):
+        scores["허가/임상"] += 8
+        if not _has_any(text, ["guidance", "guideline", "가이드라인", "지침", "정책", "규정", "EudraLex", "draft guidance"]):
+            scores["정책/가이드라인"] = 0
+
+    return {cat: max(int(score), 0) for cat, score in scores.items()}
 
 
-def classify_article(title: str, summary: str = "") -> Tuple[str, str, str, bool]:
-    text = f"{normalize_text(title)} {normalize_text(summary)}"
-    scores = score_categories(title, summary)
+def _category_hits(title: str, summary: str, article_text: str, source: str, rss_query: str, article_summary: str) -> Dict[str, List[str]]:
+    return {
+        cat: _weighted_hits(title, summary, article_text, source, rss_query, article_summary, kws)[1]
+        for cat, kws in CATEGORY_KEYWORDS.items()
+    }
 
-    category = "산업/경영"
-    max_score = max(scores.values()) if scores else 0
-    if max_score > 0:
-        best = [cat for cat in CATEGORY_ORDER if scores.get(cat, 0) == max_score]
-        category = best[0] if best else "산업/경영"
+
+def classify_article_details(title: str, summary: str = "", article_text: str = "", source: str = "", rss_query: str = "", article_summary: str = "") -> Dict[str, object]:
+    text = _combined_text(title, summary, article_text, source, rss_query, article_summary)
+    scores = score_categories(title, summary, article_text, source, rss_query, article_summary)
+    hits_by_category = _category_hits(title, summary, article_text, source, rss_query, article_summary)
+
+    positive_categories = [cat for cat in CATEGORY_ORDER if scores.get(cat, 0) > 0]
+    if positive_categories:
+        max_score = max(scores[cat] for cat in positive_categories)
+        candidates = [cat for cat in positive_categories if scores[cat] == max_score]
+        category = sorted(candidates, key=lambda c: REPRESENTATIVE_PRIORITY.index(c) if c in REPRESENTATIVE_PRIORITY else 999)[0]
     elif _has_any(text, PHARMA_FALLBACK_WORDS):
         category = "산업/경영"
+        scores[category] = max(scores.get(category, 0), 1)
+    else:
+        category = "산업/경영"
 
-    matched = extract_keywords(text, max_keywords=8)
-    if not matched:
-        matched = fallback_keywords(text, max_keywords=5)
+    # Multi-tags: include categories with meaningful scores plus important contextual tags.
+    tags: List[str] = []
+    for cat in CATEGORY_ORDER:
+        threshold = 5 if cat != "산업/경영" else 6
+        if scores.get(cat, 0) >= threshold and cat not in tags:
+            tags.append(cat)
+    if category not in tags:
+        tags.insert(0, category)
 
-    high_risk = _has_any(text, ["회수", "행정처분", "판매중지", "품목취소", "영업정지", "부적합", "위해성", "불순물", "오염", "리콜", "폐기"])
-    regulatory_signal = category in ["회수/처분", "정책/가이드라인", "식약처/규제", "GMP/품질", "해외규제"]
+    keyword_hits: List[str] = []
+    for cat in [category] + [c for c in CATEGORY_ORDER if c != category]:
+        for kw in hits_by_category.get(cat, []):
+            if kw not in keyword_hits:
+                keyword_hits.append(kw)
+            if len(keyword_hits) >= 10:
+                break
+        if len(keyword_hits) >= 10:
+            break
+    if not keyword_hits:
+        keyword_hits = fallback_keywords(text, max_keywords=6)
+
+    high_risk = _has_any(text, [
+        "회수", "행정처분", "판매중지", "품목취소", "영업정지", "부적합", "위해성", "불순물", "오염", "리콜", "폐기",
+        "Warning Letter", "Form 483", "import alert", "GMP non-compliance", "무균", "데이터완전성", "data integrity",
+    ])
+    regulatory_signal = category in ["회수/처분", "정책/가이드라인", "식약처/규제", "GMP/품질", "해외규제"] or any(t in ["회수/처분", "정책/가이드라인", "식약처/규제", "GMP/품질", "해외규제"] for t in tags)
 
     if high_risk:
         importance = "높음"
@@ -253,7 +387,31 @@ def classify_article(title: str, summary: str = "") -> Tuple[str, str, str, bool
     else:
         importance = "일반"
 
-    return category, ", ".join(matched), importance, regulatory_signal
+    score_text = "; ".join([f"{cat}:{scores.get(cat, 0)}" for cat in CATEGORY_ORDER if scores.get(cat, 0) > 0])
+    if not score_text:
+        score_text = "산업/경영:1"
+    evidence = ", ".join(keyword_hits[:8]) if keyword_hits else "직접 키워드 부족"
+    basis_parts = ["제목", "RSS요약"]
+    if normalize_text(article_summary):
+        basis_parts.append("기사요약")
+    if normalize_text(article_text):
+        basis_parts.append("본문")
+    classification_reason = f"대표분류={category}; 근거={evidence}; 분석범위={'+'.join(basis_parts)}"
+
+    return {
+        "category": category,
+        "keywords": ", ".join(keyword_hits[:8]),
+        "importance": importance,
+        "qa_flag": bool(regulatory_signal or high_risk),
+        "sub_tags": ", ".join(tags[:6]),
+        "classification_reason": classification_reason,
+        "classification_score": score_text,
+    }
+
+
+def classify_article(title: str, summary: str = "", article_text: str = "", source: str = "", rss_query: str = "", article_summary: str = "") -> Tuple[str, str, str, bool]:
+    result = classify_article_details(title, summary, article_text, source, rss_query, article_summary)
+    return str(result["category"]), str(result["keywords"]), str(result["importance"]), bool(result["qa_flag"])
 
 
 def extract_keywords(text: str, max_keywords: int = 10) -> List[str]:
@@ -267,14 +425,14 @@ def extract_keywords(text: str, max_keywords: int = 10) -> List[str]:
 
 def fallback_keywords(text: str, max_keywords: int = 5) -> List[str]:
     normalized = normalize_text(text)
-    tokens = re.findall(r"[가-힣A-Za-z0-9][가-힣A-Za-z0-9·\-]{1,20}", normalized)
+    tokens = re.findall(r"[가-힣A-Za-z0-9][가-힣A-Za-z0-9·\-/]{1,24}", normalized)
     stopwords = {
         "그리고", "대한", "관련", "기반", "발표", "공개", "확대", "추진", "위한", "이번", "통해", "기자", "뉴스",
-        "데일리팜", "히트뉴스", "팜뉴스", "약업신문", "약업닷컴", "바이오스펙테이터", "메디파나뉴스", "메디파나", "의학신문", "한국의약통신", "헬스코리아뉴스", "약사공론"
+        "데일리팜", "히트뉴스", "팜뉴스", "약업신문", "약업닷컴", "바이오스펙테이터", "메디파나뉴스", "메디파나", "의학신문", "한국의약통신", "헬스코리아뉴스", "약사공론",
     }
     result: List[str] = []
     for token in tokens:
-        t = token.strip("-·")
+        t = token.strip("-·/")
         if len(t) < 2 or t in stopwords:
             continue
         if t not in result:

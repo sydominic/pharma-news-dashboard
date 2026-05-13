@@ -9,11 +9,13 @@ from typing import Iterable, List
 import pandas as pd
 from bs4 import BeautifulSoup
 
-from .classifier import CATEGORY_ORDER, classify_article
+from .classifier import CATEGORY_ORDER, classify_article, classify_article_details
+from .article_enricher import summarize_article
 
 STANDARD_COLUMNS: List[str] = [
     "uid", "published_at", "date", "time", "source", "category", "keywords", "importance", "qa_flag",
-    "title", "summary", "link", "rss_query_name", "rss_query", "collected_at"
+    "title", "summary", "article_summary", "article_text", "sub_tags", "classification_reason", "classification_score",
+    "body_fetch_status", "link", "rss_query_name", "rss_query", "collected_at"
 ]
 
 TEXT_COLUMNS = [c for c in STANDARD_COLUMNS if c != "qa_flag"]
@@ -114,6 +116,41 @@ def clean_summary(value: object) -> str:
     return text[:400]
 
 
+def clean_article_text(value: object) -> str:
+    text = clean_text(value)
+    return text[:6000]
+
+
+def clean_article_summary(value: object) -> str:
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except Exception:
+        pass
+    text = str(value).strip()
+    if text.lower() in NULL_LIKE:
+        return ""
+    for _ in range(3):
+        new_text = html.unescape(text)
+        if new_text == text:
+            break
+        text = new_text
+    if "<" in text and ">" in text:
+        try:
+            text = BeautifulSoup(text, "html.parser").get_text("\n", strip=True)
+        except Exception:
+            pass
+    text = re.sub(r"https?://\S+", " ", text)
+    lines = []
+    for line in re.split(r"[\r\n]+", text):
+        line = re.sub(r"\s+", " ", line).strip()
+        if line and line.lower() not in NULL_LIKE:
+            lines.append(line)
+    return "\n".join(lines)[:1200]
+
+
 def normalize_bool(value: object) -> bool:
     if isinstance(value, bool):
         return value
@@ -149,15 +186,27 @@ def repair_and_reclassify(df: pd.DataFrame, force: bool = False) -> pd.DataFrame
     for _, row in input_df.iterrows():
         title = clean_title(row.get("title", ""))
         summary = clean_summary(row.get("summary", ""))
+        article_text = clean_article_text(row.get("article_text", ""))
+        article_summary = clean_article_summary(row.get("article_summary", ""))
+        body_fetch_status = clean_text(row.get("body_fetch_status", ""))
         source = clean_text(row.get("source", ""))
         rss_query_name = clean_text(row.get("rss_query_name", ""))
         rss_query = clean_text(row.get("rss_query", ""))
         collected_at = clean_text(row.get("collected_at", ""))
         link = recover_link_from_candidates(row)
 
+        # Existing caches may not yet have generated summaries. Create a safe 3~5 line fallback from RSS/body.
+        if not article_summary:
+            article_summary = summarize_article(title, summary, article_text, max_lines=4)
+        if not body_fetch_status:
+            body_fetch_status = "본문수집성공" if article_text else "RSS요약사용"
+
         category = clean_text(row.get("category", ""))
         keywords = clean_text(row.get("keywords", ""))
         importance = clean_text(row.get("importance", ""))
+        sub_tags = clean_text(row.get("sub_tags", ""))
+        classification_reason = clean_text(row.get("classification_reason", ""))
+        classification_score = clean_text(row.get("classification_score", ""))
         qa_flag = normalize_bool(row.get("qa_flag", False))
 
         needs_cls = (
@@ -166,10 +215,19 @@ def repair_and_reclassify(df: pd.DataFrame, force: bool = False) -> pd.DataFrame
             or category == "기타"
             or not keywords
             or importance not in {"높음", "중간", "일반"}
+            or not sub_tags
+            or not classification_reason
+            or not classification_score
         )
         if needs_cls:
-            category, keywords, importance, qa_flag = classify_article(title, summary)
-            qa_flag = bool(qa_flag)
+            cls = classify_article_details(title, summary, article_text=article_text, source=source, rss_query=rss_query, article_summary=article_summary)
+            category = str(cls.get("category", "산업/경영"))
+            keywords = str(cls.get("keywords", ""))
+            importance = str(cls.get("importance", "일반"))
+            qa_flag = bool(cls.get("qa_flag", False))
+            sub_tags = str(cls.get("sub_tags", ""))
+            classification_reason = str(cls.get("classification_reason", ""))
+            classification_score = str(cls.get("classification_score", ""))
 
         if clean_text(category) not in VALID_CATEGORIES:
             category = "산업/경영"
@@ -200,6 +258,12 @@ def repair_and_reclassify(df: pd.DataFrame, force: bool = False) -> pd.DataFrame
             "qa_flag": bool(qa_flag),
             "title": title,
             "summary": summary,
+            "article_summary": article_summary,
+            "article_text": article_text,
+            "sub_tags": sub_tags,
+            "classification_reason": classification_reason,
+            "classification_score": classification_score,
+            "body_fetch_status": body_fetch_status,
             "link": link,
             "rss_query_name": rss_query_name,
             "rss_query": rss_query,
@@ -286,7 +350,10 @@ def filter_news(df: pd.DataFrame, start_date, end_date, categories: Iterable[str
         hay = (
             work["title"].fillna("").astype(str) + " " +
             work["summary"].fillna("").astype(str) + " " +
+            work.get("article_summary", pd.Series([""] * len(work))).fillna("").astype(str) + " " +
+            work.get("article_text", pd.Series([""] * len(work))).fillna("").astype(str) + " " +
             work["keywords"].fillna("").astype(str) + " " +
+            work.get("sub_tags", pd.Series([""] * len(work))).fillna("").astype(str) + " " +
             work["source"].fillna("").astype(str)
         ).str.lower()
         work = work[hay.str.contains(keyword, regex=False, na=False)]
@@ -308,10 +375,28 @@ def to_excel_bytes(df: pd.DataFrame) -> bytes:
 
 
 def sample_news() -> pd.DataFrame:
-    rows = [
-        ["sample01", "2026-05-12 09:30:00", "2026-05-12", "09:30", "데일리팜", "식약처/규제", "식약처, GMP", "중간", True, "식약처, 의약품 GMP 실태조사 결과 공개", "샘플 데이터입니다. RSS 수집 후 실제 기사로 대체됩니다.", "", "sample", "", ""],
-        ["sample02", "2026-05-12 08:50:00", "2026-05-12", "08:50", "히트뉴스", "허가/임상", "허가, 임상", "일반", False, "국내 제약사, 신약 임상 3상 승인", "샘플 데이터입니다.", "", "sample", "", ""],
-        ["sample03", "2026-05-11 17:40:00", "2026-05-11", "17:40", "팜뉴스", "회수/처분", "회수, 부적합", "높음", True, "일부 의약품 회수 공지, 제조번호 확인 필요", "샘플 데이터입니다.", "", "sample", "", ""],
-        ["sample04", "2026-05-11 14:15:00", "2026-05-11", "14:15", "바이오스펙테이터", "해외규제", "FDA, EMA", "중간", True, "FDA, 바이오의약품 허가 가이드라인 개정", "샘플 데이터입니다.", "", "sample", "", ""],
+    sample_rows = [
+        {
+            "uid": "sample01", "published_at": "2026-05-12 09:30:00", "date": "2026-05-12", "time": "09:30",
+            "source": "데일리팜", "title": "식약처, 의약품 GMP 실태조사 결과 공개",
+            "summary": "샘플 데이터입니다. RSS 수집 후 실제 기사로 대체됩니다.",
+            "link": "", "rss_query_name": "sample", "rss_query": "", "collected_at": "",
+        },
+        {
+            "uid": "sample02", "published_at": "2026-05-12 08:50:00", "date": "2026-05-12", "time": "08:50",
+            "source": "히트뉴스", "title": "국내 제약사, 신약 임상 3상 승인",
+            "summary": "샘플 데이터입니다.", "link": "", "rss_query_name": "sample", "rss_query": "", "collected_at": "",
+        },
+        {
+            "uid": "sample03", "published_at": "2026-05-11 17:40:00", "date": "2026-05-11", "time": "17:40",
+            "source": "팜뉴스", "title": "일부 의약품 회수 공지, 제조번호 확인 필요",
+            "summary": "샘플 데이터입니다.", "link": "", "rss_query_name": "sample", "rss_query": "", "collected_at": "",
+        },
+        {
+            "uid": "sample04", "published_at": "2026-05-11 14:15:00", "date": "2026-05-11", "time": "14:15",
+            "source": "바이오스펙테이터", "title": "FDA, 바이오의약품 허가 가이드라인 개정",
+            "summary": "샘플 데이터입니다.", "link": "", "rss_query_name": "sample", "rss_query": "", "collected_at": "",
+        },
     ]
-    return pd.DataFrame(rows, columns=STANDARD_COLUMNS)
+    df = pd.DataFrame(sample_rows)
+    return repair_and_reclassify(df, force=True)

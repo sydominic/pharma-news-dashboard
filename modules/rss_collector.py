@@ -17,6 +17,8 @@ import pandas as pd
 import requests
 from bs4 import BeautifulSoup
 
+from .article_enricher import enrich_article
+
 KST = ZoneInfo("Asia/Seoul")
 GOOGLE_NEWS_RSS = "https://news.google.com/rss/search"
 
@@ -132,6 +134,10 @@ def collect_google_news(config_path: str | Path, start_date=None, end_date=None,
     ceid = settings.get("ceid", "KR:ko")
     max_items = int(max_items_per_query or settings.get("max_items_per_query", 80))
     timeout_sec = int(settings.get("timeout_sec", 12))
+    fetch_article_body = bool(settings.get("fetch_article_body", True))
+    article_body_timeout_sec = int(settings.get("article_body_timeout_sec", 5))
+    article_body_max_chars = int(settings.get("article_body_max_chars", 6000))
+    max_body_fetch_per_run = int(settings.get("max_body_fetch_per_run", 80))
     collected_at = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
 
     rows: List[Dict[str, Any]] = []
@@ -170,6 +176,9 @@ def collect_google_news(config_path: str | Path, start_date=None, end_date=None,
                     "source": source,
                     "published_at": published_at,
                     "summary": summary,
+                    "article_summary": "",
+                    "article_text": "",
+                    "body_fetch_status": "대기",
                     "link": link,
                     "rss_query_name": query_name,
                     "rss_query": query,
@@ -182,14 +191,35 @@ def collect_google_news(config_path: str | Path, start_date=None, end_date=None,
     df = pd.DataFrame(rows)
     if df.empty:
         out = pd.DataFrame(columns=[
-            "uid", "title", "source", "published_at", "summary", "link", "rss_query_name", "rss_query", "rss_url", "collected_at"
+            "uid", "title", "source", "published_at", "summary", "article_summary", "article_text", "body_fetch_status", "link", "rss_query_name", "rss_query", "rss_url", "collected_at"
         ])
         out.attrs["errors"] = errors
         return out
 
     df = df.drop_duplicates(subset=["uid"], keep="first")
     df["published_at"] = pd.to_datetime(df["published_at"], errors="coerce")
-    df = df.sort_values("published_at", ascending=False)
+    df = df.sort_values("published_at", ascending=False).reset_index(drop=True)
+
+    # 내용 기반 분류와 화면 요약을 위해 원문 본문 일부를 가능한 범위에서 수집합니다.
+    # 너무 느려지지 않도록 실행당 수집 상한을 둡니다. 본문 실패 시 RSS 요약 기반으로 대체됩니다.
+    enrich_limit = max(0, min(max_body_fetch_per_run, len(df)))
+    for idx in range(len(df)):
+        row = df.iloc[idx]
+        should_fetch = fetch_article_body and idx < enrich_limit
+        enriched = enrich_article(
+            title=str(row.get("title", "")),
+            rss_summary=str(row.get("summary", "")),
+            link=str(row.get("link", "")),
+            fetch_body=should_fetch,
+            timeout_sec=article_body_timeout_sec,
+            max_chars=article_body_max_chars,
+        )
+        df.at[idx, "article_text"] = enriched.get("article_text", "")
+        df.at[idx, "article_summary"] = enriched.get("article_summary", "")
+        df.at[idx, "body_fetch_status"] = enriched.get("body_fetch_status", "RSS요약사용")
+        if should_fetch:
+            time.sleep(0.05)
+
     df["published_at"] = df["published_at"].dt.strftime("%Y-%m-%d %H:%M:%S")
     df.attrs["errors"] = errors
     return df.reset_index(drop=True)

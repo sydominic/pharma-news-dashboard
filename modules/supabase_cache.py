@@ -11,6 +11,12 @@ TABLE_ARTICLES = "news_articles"
 TABLE_LOG = "collection_log"
 CACHE_DAYS = 30
 
+LEGACY_COLUMNS = [
+    "uid", "published_at", "date", "time", "source", "category", "keywords", "importance", "qa_flag",
+    "title", "summary", "link", "rss_query_name", "rss_query", "collected_at"
+]
+
+
 
 def _safe_secret(secrets: Any, *names: str) -> str:
     for name in names:
@@ -90,10 +96,20 @@ def upsert_articles(secrets: Any, df: pd.DataFrame, days: int = CACHE_DAYS) -> i
         rec["cache_updated_at"] = now_iso
         records.append(rec)
     # Chunk to avoid payload limits.
+    # If the Supabase table has not yet been migrated to v1.34 columns, retry with legacy columns
+    # so the dashboard still runs; run supabase_migration_v28.sql to persist article summaries in Supabase.
     total = 0
     for i in range(0, len(records), 500):
         chunk = records[i:i + 500]
-        client.table(TABLE_ARTICLES).upsert(chunk, on_conflict="uid").execute()
+        try:
+            client.table(TABLE_ARTICLES).upsert(chunk, on_conflict="uid").execute()
+        except Exception as exc:
+            msg = str(exc).lower()
+            if any(name in msg for name in ["article_summary", "article_text", "sub_tags", "classification_reason", "classification_score", "body_fetch_status", "column"]):
+                legacy_chunk = [{k: rec.get(k, "") for k in LEGACY_COLUMNS} | {"cache_updated_at": rec.get("cache_updated_at")} for rec in chunk]
+                client.table(TABLE_ARTICLES).upsert(legacy_chunk, on_conflict="uid").execute()
+            else:
+                raise
         total += len(chunk)
     return total
 
