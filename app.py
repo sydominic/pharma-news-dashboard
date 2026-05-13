@@ -41,13 +41,13 @@ DATA_DIR = BASE_DIR / "data"
 CONFIG_PATH = DATA_DIR / "rss_sources.json"
 RAW_PATH = DATA_DIR / "news_raw.csv"
 CLEAN_PATH = DATA_DIR / "news_clean.csv"
-APP_VERSION = "v1.30"
+APP_VERSION = "v1.31"
 
 st.set_page_config(page_title="제약뉴스 RSS 대시보드", page_icon="📰", layout="wide", initial_sidebar_state="collapsed")
 inject_css()
 
 IMPORTANCE_ORDER = {"높음": 3, "중간": 2, "일반": 1}
-INITIAL_SUPABASE_LOAD_DAYS = 7
+INITIAL_SUPABASE_LOAD_DAYS = 3
 EXTENDED_SUPABASE_LOAD_DAYS = CACHE_DAYS
 
 
@@ -700,7 +700,7 @@ def render_collect_scope_popover() -> None:
                 - 선택한 수집기간을 Google News RSS 검색식에 `after:YYYY-MM-DD`, `before:YYYY-MM-DD` 조건으로 붙입니다.
                 - 단, Google News RSS는 공식 API가 아니므로 결과 누락 또는 정렬 차이가 있을 수 있습니다.
                 - 각 검색식당 최대 수집 건수도 함께 제한합니다.
-                - Supabase 설정 시 최근 30일 기사 메타데이터를 보관하고, 앱 첫 화면은 최근 7일만 우선 로드합니다.
+                - Supabase 설정 시 최근 30일 기사 메타데이터를 보관하고, 앱 첫 화면은 최근 3일만 우선 로드합니다.
                 """
             )
     else:
@@ -750,7 +750,7 @@ with st.container(border=True):
     with c5:
         search_keyword = st.text_input("검색어", placeholder="제목, 키워드, 언론사 검색", label_visibility="collapsed")
     with c6:
-        collect_days = st.selectbox("RSS 수집기간", [1, 3, 7, 14, 30, 90], index=4, format_func=lambda x: f"최근 {x}일", label_visibility="collapsed")
+        collect_days = st.selectbox("RSS 수집기간", [1, 3, 7, 14, 30, 90], index=1, format_func=lambda x: f"최근 {x}일", label_visibility="collapsed")
     with c7:
         max_items = st.selectbox("쿼리당 수집", [50, 80, 100], index=2, format_func=lambda x: f"{x}건/식", label_visibility="collapsed")
 
@@ -767,7 +767,7 @@ if isinstance(selected_range, tuple) and len(selected_range) == 2:
 else:
     start_date = end_date = selected_range
 
-# 조회기간이 최근 7일보다 길어지면 그때 최근 30일 캐시를 추가 로드합니다.
+# 조회기간이 최근 3일보다 길어지면 그때 최근 30일 캐시를 추가 로드합니다.
 try:
     needs_extended_load = start_date < (date.today() - timedelta(days=INITIAL_SUPABASE_LOAD_DAYS - 1))
 except Exception:
