@@ -18,7 +18,7 @@ def inject_css() -> None:
         header[data-testid="stHeader"] { background:rgba(255,255,255,0); }
         div[data-testid="stMetric"] { background:white; border:1px solid #dce7f4; border-radius:18px; padding:14px 16px; box-shadow:0 8px 18px rgba(8,31,63,0.06); }
         .hanall-header { padding:20px 24px; border-radius:24px; background:linear-gradient(135deg,#081f3f 0%,#123c68 100%); color:white; box-shadow:0 16px 34px rgba(8,31,63,0.14); margin-bottom:14px; position:relative; overflow:hidden; }
-        .hanall-header::after { content:"HANALL BIOPHARMA"; position:absolute; right:22px; bottom:-8px; color:rgba(255,255,255,0.06); font-size:48px; font-weight:900; letter-spacing:-1px; }
+        .hanall-header::after { content:"HANALL BIOPHARMA"; position:absolute; right:22px; bottom:-8px; color:rgba(255,255,255,0.14); font-size:48px; font-weight:900; letter-spacing:-1px; }
         .hanall-header h1 { margin:0; font-size:30px; letter-spacing:-0.8px; }
         .hanall-header p { margin:7px 0 0; color:rgba(255,255,255,0.76); font-size:14px; }
         .compact-filter-title { font-weight:900; color:#081f3f; font-size:15px; margin:-2px 0 8px 0; }

@@ -32,7 +32,7 @@ DATA_DIR = BASE_DIR / "data"
 CONFIG_PATH = DATA_DIR / "rss_sources.json"
 RAW_PATH = DATA_DIR / "news_raw.csv"
 CLEAN_PATH = DATA_DIR / "news_clean.csv"
-APP_VERSION = "v1.27"
+APP_VERSION = "v1.28"
 
 st.set_page_config(page_title="제약뉴스 RSS 대시보드", page_icon="📰", layout="wide", initial_sidebar_state="collapsed")
 inject_css()
@@ -703,15 +703,13 @@ with st.container(border=True):
     with c7:
         max_items = st.selectbox("쿼리당 수집", [50, 80, 100], index=2, format_func=lambda x: f"{x}건/식", label_visibility="collapsed")
 
-    b1, b2, b3, b4 = st.columns([1.25, 1.0, 1.0, 3.2])
+    b1, b2, b3 = st.columns([1.25, 1.0, 1.0])
     with b1:
         collect_clicked = st.button(f"🛰️ RSS 수집", type="primary", use_container_width=True)
     with b2:
         render_importance_criteria_popover()
     with b3:
         render_collect_scope_popover()
-    with b4:
-        st.caption(f"데이터 상태: {source_status()} · 온라인 안정화 버전 · 원문은 Google News RSS 링크를 통해 열립니다.")
 
 if isinstance(selected_range, tuple) and len(selected_range) == 2:
     start_date, end_date = selected_range
@@ -916,5 +914,5 @@ elif active_tab == "policy":
             render_policy_card(row)
 
     st.divider()
-    section_title("규제기관 정책/가이드라인 게시판 바로가기", "게시판 자체 연결")
+    section_title("규제기관 정책/가이드라인 게시판 바로가기", "")
     render_policy_board_links()
