@@ -23,7 +23,15 @@ POLICY_ACTION_KEYWORDS = [
     "EudraLex", "reflection paper", "concept paper", "Q&A", "notice", "notification", "update", "revision", "revised",
 ]
 
-POLICY_GUIDE_KEYWORDS = POLICY_ACTION_KEYWORDS
+# 식약처/규제에 잡혔지만 정책 탭에서 빠지기 쉬운 '정책 변화/제도 개선'형 표현.
+# 단독으로는 너무 넓으므로 MFDS 등 규제기관명과 같이 있을 때만 정책성으로 인정한다.
+POLICY_CHANGE_KEYWORDS = [
+    "정책변화", "정책 변화", "정책추가", "정책 추가", "제도개선", "제도 개선", "개선방안", "개선 방안",
+    "혁신방안", "혁신 방안", "의견수렴", "의견 수렴", "시범사업", "로드맵",
+    "허가·심사", "허가 심사", "허가심사", "심사 속도", "신속심사", "규제개선", "규제 개선",
+]
+
+POLICY_GUIDE_KEYWORDS = POLICY_ACTION_KEYWORDS + POLICY_CHANGE_KEYWORDS
 
 RECALL_KEYWORDS = [
     "회수", "회수·폐기", "회수폐기", "폐기", "리콜", "recall", "행정처분", "판매중지", "판매 중지",
@@ -128,7 +136,7 @@ def _has_any(text: str, keywords: List[str]) -> bool:
 
 def is_mfds_policy_article(title: str, summary: str = "") -> bool:
     text = f"{normalize_text(title)} {normalize_text(summary)}"
-    return _has_any(text, MFDS_TERMS) and _has_any(text, POLICY_ACTION_KEYWORDS)
+    return _has_any(text, MFDS_TERMS) and _has_any(text, POLICY_ACTION_KEYWORDS + POLICY_CHANGE_KEYWORDS)
 
 
 def is_overseas_policy_article(title: str, summary: str = "") -> bool:
@@ -159,7 +167,7 @@ def is_mfds_regulatory(title: str, summary: str = "") -> bool:
 
 def policy_type(title: str, summary: str = "") -> str:
     text = f"{normalize_text(title)} {normalize_text(summary)}"
-    if _has_any(text, ["FDA", "USFDA"]) and _has_any(text, ["guidance", "guideline", "draft guidance", "final guidance", "가이드라인"]):
+    if _has_any(text, ["FDA", "USFDA"]) and _has_any(text, ["guidance", "guideline", "draft guidance", "final guidance", "가이드라인", "지침"]):
         return "FDA Guidance"
     if _has_any(text, ["European Commission", "EudraLex", "EC", "EMA"]) and _has_any(text, ["EudraLex", "guideline", "guidance", "가이드라인", "개정", "update"]):
         return "EC/EMA Guideline"
@@ -171,6 +179,8 @@ def policy_type(title: str, summary: str = "") -> str:
         return "PMDA Guideline/Notification"
     if _has_any(text, ["EDQM", "Ph. Eur", "Ph.Eur"]):
         return "EDQM/Ph. Eur."
+    if _has_any(text, ["개선방안", "혁신방안", "제도개선", "의견수렴", "허가·심사", "허가 심사", "허가심사", "신속심사", "규제개선"]):
+        return "MFDS 허가심사/제도개선"
     if _has_any(text, ["민원인안내서", "민원인 안내서", "안내서", "해설서", "질의응답", "Q&A", "qa"]):
         return "MFDS 민원인안내서/해설서"
     if _has_any(text, ["공무원지침서", "공무원 지침서", "지침", "심사지침"]):

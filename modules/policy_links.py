@@ -6,7 +6,7 @@ from urllib.parse import quote
 
 import pandas as pd
 
-from .classifier import is_policy_article, policy_type
+from .classifier import is_policy_article, policy_type, normalize_text, MFDS_TERMS, POLICY_ACTION_KEYWORDS, POLICY_CHANGE_KEYWORDS, OVERSEAS_REGULATORS, OVERSEAS_REG_ACTION_KEYWORDS
 
 
 def clean_query(text: object, max_terms: int = 4) -> str:
@@ -46,11 +46,38 @@ def google_official_search_link(query: str) -> str:
     return "https://www.google.com/search?q=" + quote(f"site:mfds.go.kr {query}")
 
 
+
+def _has_any_text(text: str, keywords: List[str]) -> bool:
+    low = text.lower()
+    for kw in keywords:
+        if not kw:
+            continue
+        if kw.isascii():
+            if kw.lower() in low:
+                return True
+        elif kw in text:
+            return True
+    return False
+
+
+def looks_like_official_policy_change(row: pd.Series) -> bool:
+    """규제 레이더의 식약처/규제 기사 중 실제 정책 변화 성격을 정책 탭에 올리기 위한 보완 조건."""
+    text = f"{normalize_text(row.get('title', ''))} {normalize_text(row.get('summary', ''))}"
+    category = normalize_text(row.get('category', ''))
+    if _has_any_text(text, MFDS_TERMS) and _has_any_text(text, POLICY_ACTION_KEYWORDS + POLICY_CHANGE_KEYWORDS):
+        return True
+    if category == "식약처/규제" and _has_any_text(text, MFDS_TERMS) and _has_any_text(text, POLICY_CHANGE_KEYWORDS):
+        return True
+    if _has_any_text(text, OVERSEAS_REGULATORS) and _has_any_text(text, POLICY_ACTION_KEYWORDS + OVERSEAS_REG_ACTION_KEYWORDS):
+        return True
+    return False
+
+
 def extract_policy_articles(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame()
     work = df.copy()
-    mask = work.apply(lambda r: is_policy_article(r.get("title", ""), r.get("summary", "")), axis=1)
+    mask = work.apply(lambda r: is_policy_article(r.get("title", ""), r.get("summary", "")) or looks_like_official_policy_change(r), axis=1)
     out = work[mask].copy()
     if out.empty:
         return out
