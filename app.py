@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import Counter
 from difflib import SequenceMatcher
 import re
-from datetime import date, datetime, timedelta
+from datetime import timedelta
 from pathlib import Path
 from typing import List, Tuple
 
@@ -37,13 +37,14 @@ from modules.supabase_cache import (
     write_collection_log,
 )
 from modules.ui_components import article_card, esc, header, inject_css, kpi_card, keyword_pills, section_title, timeline_item, title_with_link
+from modules.time_utils import now_kst, today_kst, to_kst_series
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 CONFIG_PATH = DATA_DIR / "rss_sources.json"
 RAW_PATH = DATA_DIR / "news_raw.csv"
 CLEAN_PATH = DATA_DIR / "news_clean.csv"
-APP_VERSION = "v1.37-no-summary-strict-noise-filter"
+APP_VERSION = "v1.38-kst-date-handling"
 
 st.set_page_config(page_title="제약뉴스 RSS 대시보드", page_icon="📰", layout="wide", initial_sidebar_state="collapsed")
 inject_css()
@@ -206,7 +207,7 @@ def load_or_collect_initial(days: int = INITIAL_SUPABASE_LOAD_DAYS) -> pd.DataFr
         return df
     try:
         with st.spinner(f"최초 실행: 최근 {days}일 Google News RSS에서 기사 수집 중입니다..."):
-            today = date.today()
+            today = today_kst()
             df, errors, _ = collect_and_save(start_date=today - timedelta(days=days - 1), end_date=today)
         if errors:
             st.warning("일부 RSS 검색식에서 수집 오류가 있었습니다. 수집된 데이터는 정상 표시합니다.")
@@ -224,7 +225,7 @@ def prepare_display_df(df: pd.DataFrame) -> pd.DataFrame:
     for col in STANDARD_COLUMNS:
         if col not in work.columns:
             work[col] = ""
-    work["published_at_dt"] = pd.to_datetime(work["published_at"], errors="coerce")
+    work["published_at_dt"] = to_kst_series(work["published_at"])
     work = work.sort_values("published_at_dt", ascending=False)
     work["published_at"] = work["published_at_dt"].dt.strftime("%Y-%m-%d %H:%M:%S").fillna("")
     work["date"] = work["published_at_dt"].dt.strftime("%Y-%m-%d").fillna("")
@@ -282,7 +283,7 @@ def category_trend(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame(columns=["date", "category", "count"])
     work = df.copy()
-    work["date"] = pd.to_datetime(work["date"], errors="coerce")
+    work["date"] = to_kst_series(work["published_at"]).dt.date
     work["category"] = work["category"].fillna("산업/경영").astype(str).replace({"": "산업/경영", "nan": "산업/경영", "None": "산업/경영"})
     trend = work.dropna(subset=["date"]).groupby(["date", "category"], as_index=False).size().rename(columns={"size": "count"})
     return trend.sort_values("date")
@@ -485,7 +486,7 @@ def build_weekly_report(df: pd.DataFrame, issue_groups: list[dict], start_date, 
     lines = []
     lines.append("# 제약뉴스 주간 모니터링 리포트")
     lines.append("")
-    lines.append(f"- 생성일시: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    lines.append(f"- 생성일시(KST): {now_kst().strftime('%Y-%m-%d %H:%M')}")
     lines.append(f"- 조회기간: {start_date} ~ {end_date}")
     lines.append(f"- 전체 기사 수: {len(df):,}건")
     lines.append("")
@@ -548,7 +549,7 @@ def representative_articles(df: pd.DataFrame, limit: int = 5) -> pd.DataFrame:
     counter = count_keywords(df)
     top_keywords = [kw for kw, _ in counter.most_common(12)]
     work = df.copy()
-    work["published_at_dt"] = pd.to_datetime(work["published_at"], errors="coerce")
+    work["published_at_dt"] = to_kst_series(work["published_at"])
 
     def kw_score(value: object) -> int:
         kws = [x.strip() for x in str(value).split(",") if x.strip()]
@@ -565,7 +566,7 @@ def importance_articles(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
     work = df.copy()
-    work["published_at_dt"] = pd.to_datetime(work["published_at"], errors="coerce")
+    work["published_at_dt"] = to_kst_series(work["published_at"])
     work["_importance_rank"] = work["importance"].map(IMPORTANCE_ORDER).fillna(1)
     return work.sort_values(["_importance_rank", "published_at_dt"], ascending=[False, False]).drop(columns=["published_at_dt", "_importance_rank"], errors="ignore")
 
@@ -817,7 +818,7 @@ header(
 )
 
 # 조회조건: 기존 큰 영역을 줄여 상단 얇은 검색바 형태로 구성
-max_date = date.today()
+max_date = today_kst()
 min_date = max_date - timedelta(days=EXTENDED_SUPABASE_LOAD_DAYS - 1)
 default_start = max_date - timedelta(days=INITIAL_SUPABASE_LOAD_DAYS - 1)
 
@@ -825,7 +826,7 @@ with st.container(border=True):
     st.markdown("<div class='compact-filter-title'>조회조건</div>", unsafe_allow_html=True)
     c1, c2, c3, c4, c5, c6, c7 = st.columns([1.28, 1.05, 1.05, 0.95, 1.55, 0.95, 0.95])
     with c1:
-        selected_range = st.date_input("조회기간", value=(default_start, max_date), min_value=min_date, max_value=max(max_date, date.today()), label_visibility="collapsed")
+        selected_range = st.date_input("조회기간", value=(default_start, max_date), min_value=min_date, max_value=max_date, label_visibility="collapsed")
     with c2:
         category_options = ["전체"] + sorted([x for x in all_df["category"].dropna().unique().tolist() if x])
         selected_categories = st.multiselect("카테고리", category_options, default=["전체"], label_visibility="collapsed")
@@ -857,7 +858,7 @@ else:
 
 # 조회기간이 최근 7일보다 길어지면 그때 최근 30일 캐시를 추가 로드합니다.
 try:
-    needs_extended_load = start_date < (date.today() - timedelta(days=INITIAL_SUPABASE_LOAD_DAYS - 1))
+    needs_extended_load = start_date < (today_kst() - timedelta(days=INITIAL_SUPABASE_LOAD_DAYS - 1))
 except Exception:
     needs_extended_load = False
 if needs_extended_load:
@@ -866,7 +867,7 @@ if needs_extended_load:
 
 if collect_clicked:
     try:
-        today = date.today()
+        today = today_kst()
         collect_start = today - timedelta(days=int(collect_days) - 1)
         with st.spinner(f"Google News RSS 수집 중입니다. 기준: {collect_start} ~ {today}"):
             updated_df, errors, added_count = collect_and_save(start_date=collect_start, end_date=today, max_items_per_query=int(max_items))
@@ -928,9 +929,9 @@ active_tab = st.session_state["active_tab"]
 
 if active_tab == "dashboard":
     st.subheader("📊 Dashboard")
-    now = pd.Timestamp.now()
+    now = pd.Timestamp(now_kst())
     df_dt = filtered_df.copy()
-    df_dt["published_at_dt"] = pd.to_datetime(df_dt["published_at"], errors="coerce")
+    df_dt["published_at_dt"] = to_kst_series(df_dt["published_at"])
     new_24h = int((df_dt["published_at_dt"] >= (now - pd.Timedelta(hours=24))).sum()) if not df_dt.empty else 0
     high_count = int((filtered_df["importance"] == "높음").sum()) if not filtered_df.empty else 0
     policy_count = len(extract_policy_articles(filtered_df)) if not filtered_df.empty else 0

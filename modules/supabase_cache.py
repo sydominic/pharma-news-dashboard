@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from typing import Any
 
 import pandas as pd
 
 from .news_cleaner import STANDARD_COLUMNS, make_empty_frame, repair_and_reclassify
+from .time_utils import kst_cutoff_for_recent_days, now_kst, to_kst_series, to_supabase_timestamptz
 
 TABLE_ARTICLES = "news_articles"
 TABLE_LOG = "collection_log"
@@ -49,7 +50,8 @@ def get_client(secrets: Any):
 
 
 def _cutoff_iso(days: int = CACHE_DAYS) -> str:
-    return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    # KST 달력일 기준 최근 N일의 시작시각입니다. Supabase timestamptz에는 +09:00 오프셋 포함 ISO로 전달합니다.
+    return kst_cutoff_for_recent_days(days).isoformat()
 
 
 def load_recent_articles(secrets: Any, days: int = CACHE_DAYS) -> pd.DataFrame:
@@ -80,19 +82,18 @@ def upsert_articles(secrets: Any, df: pd.DataFrame, days: int = CACHE_DAYS) -> i
     if client is None or df is None or df.empty:
         return 0
     work = repair_and_reclassify(df, force=False).copy()
-    work["published_at_dt"] = pd.to_datetime(work["published_at"], errors="coerce", utc=True)
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    work["published_at_dt"] = to_kst_series(work["published_at"])
+    cutoff = pd.Timestamp(kst_cutoff_for_recent_days(days))
     work = work[work["published_at_dt"] >= cutoff].drop(columns=["published_at_dt"], errors="ignore")
     if work.empty:
         return 0
     records = []
-    now_iso = datetime.now(timezone.utc).isoformat()
+    now_iso = now_kst().isoformat()
     for _, row in work.iterrows():
         rec = {col: row.get(col, "") for col in STANDARD_COLUMNS}
         rec["qa_flag"] = bool(rec.get("qa_flag", False))
         # Supabase column is timestamptz; empty string cannot be cast.
-        if not str(rec.get("published_at", "") or "").strip():
-            rec["published_at"] = None
+        rec["published_at"] = to_supabase_timestamptz(rec.get("published_at", ""))
         rec["cache_updated_at"] = now_iso
         records.append(rec)
     # Chunk to avoid payload limits.
@@ -132,7 +133,7 @@ def write_collection_log(secrets: Any, status: str, added_count: int = 0, total_
         "added_count": int(added_count or 0),
         "total_count": int(total_count or 0),
         "error_message": str(error_message or "")[:1000],
-        "collected_at": datetime.now(timezone.utc).isoformat(),
+        "collected_at": now_kst().isoformat(),
     }
     client.table(TABLE_LOG).upsert(rec, on_conflict="id").execute()
 

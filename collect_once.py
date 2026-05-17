@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import timedelta
 from pathlib import Path
 
 from modules.news_cleaner import load_news, merge_existing, normalize_and_classify, save_news
 from modules.rss_collector import collect_google_news
+from modules.time_utils import today_kst
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
@@ -15,7 +16,7 @@ CLEAN_PATH = DATA_DIR / "news_clean.csv"
 
 def main() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    today = date.today()
+    today = today_kst()
     start = today - timedelta(days=6)
     print("[1/4] Collect Google News RSS")
     print(f"      Date scope: {start} ~ {today}")

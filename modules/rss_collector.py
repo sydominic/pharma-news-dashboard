@@ -10,8 +10,6 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 from urllib.parse import quote_plus
-from zoneinfo import ZoneInfo
-
 import feedparser
 import pandas as pd
 import requests
@@ -19,8 +17,7 @@ from bs4 import BeautifulSoup
 
 from .article_enricher import enrich_article
 from .news_cleaner import is_excluded_notice_article
-
-KST = ZoneInfo("Asia/Seoul")
+from .time_utils import KST, now_kst, to_kst_date, to_kst_series
 GOOGLE_NEWS_RSS = "https://news.google.com/rss/search"
 
 
@@ -36,10 +33,7 @@ def _to_date(value) -> date | None:
     if isinstance(value, date) and not isinstance(value, datetime):
         return value
     try:
-        dt = pd.to_datetime(value, errors="coerce")
-        if pd.isna(dt):
-            return None
-        return dt.date()
+        return to_kst_date(value)
     except Exception:
         return None
 
@@ -98,7 +92,7 @@ def parse_datetime(entry: Dict[str, Any]) -> str:
         except Exception:
             pass
 
-    return datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
+    return now_kst().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def source_from_entry(entry: Dict[str, Any], source_hint: str = "") -> str:
@@ -139,7 +133,7 @@ def collect_google_news(config_path: str | Path, start_date=None, end_date=None,
     article_body_timeout_sec = int(settings.get("article_body_timeout_sec", 5))
     article_body_max_chars = int(settings.get("article_body_max_chars", 6000))
     max_body_fetch_per_run = int(settings.get("max_body_fetch_per_run", 80))
-    collected_at = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
+    collected_at = now_kst().strftime("%Y-%m-%d %H:%M:%S")
 
     rows: List[Dict[str, Any]] = []
     errors: List[str] = []
@@ -200,7 +194,7 @@ def collect_google_news(config_path: str | Path, start_date=None, end_date=None,
         return out
 
     df = df.drop_duplicates(subset=["uid"], keep="first")
-    df["published_at"] = pd.to_datetime(df["published_at"], errors="coerce")
+    df["published_at"] = to_kst_series(df["published_at"])
     df = df.sort_values("published_at", ascending=False).reset_index(drop=True)
 
     # 내용 기반 분류와 화면 요약을 위해 원문 본문 일부를 가능한 범위에서 수집합니다.

@@ -10,6 +10,7 @@ import pandas as pd
 from bs4 import BeautifulSoup
 
 from .classifier import CATEGORY_ORDER, classify_article, classify_article_details
+from .time_utils import now_kst, to_kst_series, to_kst_timestamp
 
 STANDARD_COLUMNS: List[str] = [
     "uid", "published_at", "date", "time", "source", "category", "keywords", "importance", "qa_flag",
@@ -334,9 +335,9 @@ def repair_and_reclassify(df: pd.DataFrame, force: bool = False) -> pd.DataFrame
             importance = "일반"
         keywords = clean_text(keywords)
 
-        published_dt = pd.to_datetime(row.get("published_at", ""), errors="coerce")
+        published_dt = to_kst_timestamp(row.get("published_at", ""))
         if pd.isna(published_dt):
-            published_dt = pd.Timestamp.now()
+            published_dt = pd.Timestamp(now_kst())
         published_at = published_dt.strftime("%Y-%m-%d %H:%M:%S")
         date_value = published_dt.strftime("%Y-%m-%d")
         time_value = published_dt.strftime("%H:%M")
@@ -414,7 +415,7 @@ def merge_existing(existing: pd.DataFrame, new: pd.DataFrame) -> pd.DataFrame:
     merged = repair_and_reclassify(merged, force=False)
 
     merged["_has_link"] = merged["link"].apply(lambda x: bool(clean_link(x)))
-    merged["published_at_dt"] = pd.to_datetime(merged["published_at"], errors="coerce")
+    merged["published_at_dt"] = to_kst_series(merged["published_at"])
     merged = merged.sort_values(["uid", "_has_link", "published_at_dt"], ascending=[True, False, False])
     merged = merged.drop_duplicates(subset=["uid"], keep="first")
     merged = merged.sort_values("published_at_dt", ascending=False).drop(columns=["published_at_dt", "_has_link"])
@@ -425,7 +426,7 @@ def filter_news(df: pd.DataFrame, start_date, end_date, categories: Iterable[str
     if df is None or df.empty:
         return make_empty_frame()
     work = repair_and_reclassify(df, force=False)
-    work["published_at_dt"] = pd.to_datetime(work["published_at"], errors="coerce")
+    work["published_at_dt"] = to_kst_series(work["published_at"])
 
     if start_date is not None:
         work = work[work["published_at_dt"].dt.date >= start_date]
