@@ -37,14 +37,14 @@ from modules.supabase_cache import (
     write_collection_log,
 )
 from modules.ui_components import article_card, esc, header, inject_css, kpi_card, keyword_pills, section_title, timeline_item, title_with_link
-from modules.time_utils import now_kst, today_kst, to_kst_series
+from modules.time_utils import now_kst, today_kst, to_kst_series, to_kst_series_with_reference
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 CONFIG_PATH = DATA_DIR / "rss_sources.json"
 RAW_PATH = DATA_DIR / "news_raw.csv"
 CLEAN_PATH = DATA_DIR / "news_clean.csv"
-APP_VERSION = "v1.38-kst-date-handling"
+APP_VERSION = "v1.40-kst-collected-time-guard"
 
 st.set_page_config(page_title="제약뉴스 RSS 대시보드", page_icon="📰", layout="wide", initial_sidebar_state="collapsed")
 inject_css()
@@ -225,7 +225,7 @@ def prepare_display_df(df: pd.DataFrame) -> pd.DataFrame:
     for col in STANDARD_COLUMNS:
         if col not in work.columns:
             work[col] = ""
-    work["published_at_dt"] = to_kst_series(work["published_at"])
+    work["published_at_dt"] = to_kst_series_with_reference(work["published_at"], work.get("collected_at"))
     work = work.sort_values("published_at_dt", ascending=False)
     work["published_at"] = work["published_at_dt"].dt.strftime("%Y-%m-%d %H:%M:%S").fillna("")
     work["date"] = work["published_at_dt"].dt.strftime("%Y-%m-%d").fillna("")

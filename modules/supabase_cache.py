@@ -6,7 +6,7 @@ from typing import Any
 import pandas as pd
 
 from .news_cleaner import STANDARD_COLUMNS, make_empty_frame, repair_and_reclassify
-from .time_utils import kst_cutoff_for_recent_days, now_kst, to_kst_series, to_supabase_timestamptz
+from .time_utils import kst_cutoff_for_recent_days, now_kst, to_kst_series, to_kst_series_with_reference, to_supabase_timestamptz
 
 TABLE_ARTICLES = "news_articles"
 TABLE_LOG = "collection_log"
@@ -82,7 +82,7 @@ def upsert_articles(secrets: Any, df: pd.DataFrame, days: int = CACHE_DAYS) -> i
     if client is None or df is None or df.empty:
         return 0
     work = repair_and_reclassify(df, force=False).copy()
-    work["published_at_dt"] = to_kst_series(work["published_at"])
+    work["published_at_dt"] = to_kst_series_with_reference(work["published_at"], work.get("collected_at"))
     cutoff = pd.Timestamp(kst_cutoff_for_recent_days(days))
     work = work[work["published_at_dt"] >= cutoff].drop(columns=["published_at_dt"], errors="ignore")
     if work.empty:
@@ -93,7 +93,7 @@ def upsert_articles(secrets: Any, df: pd.DataFrame, days: int = CACHE_DAYS) -> i
         rec = {col: row.get(col, "") for col in STANDARD_COLUMNS}
         rec["qa_flag"] = bool(rec.get("qa_flag", False))
         # Supabase column is timestamptz; empty string cannot be cast.
-        rec["published_at"] = to_supabase_timestamptz(rec.get("published_at", ""))
+        rec["published_at"] = to_supabase_timestamptz(rec.get("published_at", ""), reference=rec.get("collected_at", ""))
         rec["cache_updated_at"] = now_iso
         records.append(rec)
     # Chunk to avoid payload limits.

@@ -17,7 +17,7 @@ from bs4 import BeautifulSoup
 
 from .article_enricher import enrich_article
 from .news_cleaner import is_excluded_notice_article
-from .time_utils import KST, now_kst, to_kst_date, to_kst_series
+from .time_utils import KST, now_kst, to_kst_date, to_kst_series_with_reference
 GOOGLE_NEWS_RSS = "https://news.google.com/rss/search"
 
 
@@ -78,17 +78,29 @@ def strip_html(value: str | None) -> str:
 
 
 def parse_datetime(entry: Dict[str, Any]) -> str:
+    """Google News RSS 발행시각을 대시보드 표시용 KST 시각 문자열로 변환합니다.
+
+    Google News RSS에서 `GMT/+0000`로 들어오는 시각이 실제 기사 표시 시각과 9시간 어긋나는
+    사례가 반복되어, RSS parsed time의 시/분/초는 우선 KST wall-clock으로 간주합니다.
+    이후 수집시각(collected_at) 기준 미래시간 보정에서 한 번 더 방어합니다.
+    """
     parsed = entry.get("published_parsed") or entry.get("updated_parsed")
     if parsed:
-        dt_utc = datetime.fromtimestamp(calendar.timegm(parsed), tz=timezone.utc)
-        return dt_utc.astimezone(KST).strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            # feedparser가 준 연/월/일/시/분/초를 UTC 변환하지 않고 KST 시각으로 해석합니다.
+            dt_kst = datetime(parsed.tm_year, parsed.tm_mon, parsed.tm_mday, parsed.tm_hour, parsed.tm_min, parsed.tm_sec, tzinfo=KST)
+            return dt_kst.strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            pass
 
     published = entry.get("published") or entry.get("updated")
     if published:
         try:
-            parsed_dt = pd.to_datetime(published, utc=True, errors="coerce")
+            # timezone 표시는 제거하고 기사 RSS의 clock time을 KST로 취급합니다.
+            parsed_dt = pd.to_datetime(published, errors="coerce")
             if not pd.isna(parsed_dt):
-                return parsed_dt.tz_convert("Asia/Seoul").strftime("%Y-%m-%d %H:%M:%S")
+                parsed_dt = pd.Timestamp(parsed_dt)
+                return datetime(parsed_dt.year, parsed_dt.month, parsed_dt.day, parsed_dt.hour, parsed_dt.minute, parsed_dt.second, tzinfo=KST).strftime("%Y-%m-%d %H:%M:%S")
         except Exception:
             pass
 
@@ -194,7 +206,7 @@ def collect_google_news(config_path: str | Path, start_date=None, end_date=None,
         return out
 
     df = df.drop_duplicates(subset=["uid"], keep="first")
-    df["published_at"] = to_kst_series(df["published_at"])
+    df["published_at"] = to_kst_series_with_reference(df["published_at"], df.get("collected_at"))
     df = df.sort_values("published_at", ascending=False).reset_index(drop=True)
 
     # 내용 기반 분류와 화면 요약을 위해 원문 본문 일부를 가능한 범위에서 수집합니다.
