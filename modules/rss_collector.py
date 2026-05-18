@@ -54,8 +54,23 @@ def add_date_operators(query: str, start_date=None, end_date=None) -> str:
     return q.strip()
 
 
-def build_google_news_rss_url(query: str, hl: str = "ko", gl: str = "KR", ceid: str = "KR:ko") -> str:
-    return f"{GOOGLE_NEWS_RSS}?q={quote_plus(query)}&hl={quote_plus(hl)}&gl={quote_plus(gl)}&ceid={quote_plus(ceid)}"
+def build_google_news_rss_url(
+    query: str,
+    hl: str = "ko",
+    gl: str = "KR",
+    ceid: str = "KR:ko",
+    cache_bust: bool = True,
+) -> str:
+    """Google News RSS URL을 생성합니다.
+
+    Google News RSS/CDN이 같은 URL에 대해 오래된 응답을 반환하는 경우가 있어,
+    수동 수집 시점마다 `_cb` 파라미터를 붙여 stale feed 가능성을 낮춥니다.
+    Google News가 이 파라미터를 검색조건으로 보지는 않지만, HTTP 캐시 키는 달라집니다.
+    """
+    url = f"{GOOGLE_NEWS_RSS}?q={quote_plus(query)}&hl={quote_plus(hl)}&gl={quote_plus(gl)}&ceid={quote_plus(ceid)}"
+    if cache_bust:
+        url += f"&_cb={int(time.time())}"
+    return url
 
 
 def strip_html(value: str | None) -> str:
@@ -77,35 +92,104 @@ def strip_html(value: str | None) -> str:
     return text[:400]
 
 
-def parse_datetime(entry: Dict[str, Any]) -> str:
-    """Google News RSS 발행시각을 대시보드 표시용 KST 시각 문자열로 변환합니다.
+def _as_ref_timestamp(value: str | None):
+    if not value:
+        return pd.Timestamp(now_kst())
+    try:
+        ts = pd.to_datetime(value, errors="coerce")
+        if pd.isna(ts):
+            return pd.Timestamp(now_kst())
+        ts = pd.Timestamp(ts)
+        if getattr(ts, "tzinfo", None) is None:
+            return ts.tz_localize(KST)
+        return ts.tz_convert(KST)
+    except Exception:
+        return pd.Timestamp(now_kst())
 
-    Google News RSS에서 `GMT/+0000`로 들어오는 시각이 실제 기사 표시 시각과 9시간 어긋나는
-    사례가 반복되어, RSS parsed time의 시/분/초는 우선 KST wall-clock으로 간주합니다.
-    이후 수집시각(collected_at) 기준 미래시간 보정에서 한 번 더 방어합니다.
+
+def _choose_plausible_news_time(candidates: list[pd.Timestamp], reference: str | None = None) -> pd.Timestamp | None:
+    """Google News RSS 발행시각 후보 중 가장 그럴듯한 KST 시각을 선택합니다.
+
+    같은 RSS 항목이 언론사/Google 인덱싱 상태에 따라 다음 두 형태로 관찰될 수 있습니다.
+    - GMT/UTC 시각이 정상적으로 들어온 경우: UTC → KST 변환이 맞음
+    - 이미 KST clock-time인데 GMT처럼 표시되는 경우: clock-time을 KST로 읽는 것이 맞음
+
+    그래서 두 후보를 모두 만든 뒤, 수집시각보다 미래가 아닌 후보 중 가장 최신값을 선택합니다.
+    이 방식이면 오전에는 17:24 같은 미래시간 표시를 막고, 오후에는 04:30으로 9시간 당겨지는 문제도 막습니다.
     """
+    ref = _as_ref_timestamp(reference)
+    tolerance = pd.Timedelta(minutes=30)
+    norm: list[pd.Timestamp] = []
+    for c in candidates:
+        if c is None or pd.isna(c):
+            continue
+        try:
+            ts = pd.Timestamp(c)
+            if getattr(ts, "tzinfo", None) is None:
+                ts = ts.tz_localize(KST)
+            else:
+                ts = ts.tz_convert(KST)
+            # 너무 오래된 값은 이번 수집기간에서 의미가 낮지만, 필터링은 Google query/앱 필터가 담당한다.
+            norm.append(ts)
+        except Exception:
+            continue
+    if not norm:
+        return None
+    # 중복 제거
+    uniq = []
+    seen = set()
+    for ts in norm:
+        key = ts.strftime("%Y-%m-%d %H:%M:%S%z")
+        if key not in seen:
+            seen.add(key)
+            uniq.append(ts)
+    plausible = [ts for ts in uniq if ts <= ref + tolerance]
+    if plausible:
+        return max(plausible)
+    # 전부 미래라면 가장 덜 미래인 후보를 쓰되, 뒤에서 time_utils의 미래가드가 한 번 더 방어한다.
+    return min(uniq)
+
+
+def parse_datetime(entry: Dict[str, Any], collected_at: str | None = None) -> str:
+    """Google News RSS 발행시각을 KST 표시용 문자열로 변환합니다.
+
+    핵심 원칙:
+    1) UTC로 해석한 KST 후보와 RSS clock-time을 KST로 읽은 후보를 모두 만든다.
+    2) `collected_at`보다 미래가 아닌 후보 중 가장 최신값을 쓴다.
+    3) 이렇게 해야 오전에는 +9시간 미래 표시를 막고, 오후에는 -9시간 과소표시를 막을 수 있다.
+    """
+    candidates: list[pd.Timestamp] = []
+
     parsed = entry.get("published_parsed") or entry.get("updated_parsed")
     if parsed:
         try:
-            # feedparser가 준 연/월/일/시/분/초를 UTC 변환하지 않고 KST 시각으로 해석합니다.
-            dt_kst = datetime(parsed.tm_year, parsed.tm_mon, parsed.tm_mday, parsed.tm_hour, parsed.tm_min, parsed.tm_sec, tzinfo=KST)
-            return dt_kst.strftime("%Y-%m-%d %H:%M:%S")
+            # 후보 A: RSS clock-time을 KST로 해석
+            candidates.append(pd.Timestamp(datetime(parsed.tm_year, parsed.tm_mon, parsed.tm_mday, parsed.tm_hour, parsed.tm_min, parsed.tm_sec, tzinfo=KST)))
+            # 후보 B: RSS clock-time을 UTC로 해석 후 KST 변환
+            candidates.append(pd.Timestamp(datetime(parsed.tm_year, parsed.tm_mon, parsed.tm_mday, parsed.tm_hour, parsed.tm_min, parsed.tm_sec, tzinfo=timezone.utc)).tz_convert(KST))
         except Exception:
             pass
 
     published = entry.get("published") or entry.get("updated")
     if published:
         try:
-            # timezone 표시는 제거하고 기사 RSS의 clock time을 KST로 취급합니다.
             parsed_dt = pd.to_datetime(published, errors="coerce")
             if not pd.isna(parsed_dt):
-                parsed_dt = pd.Timestamp(parsed_dt)
-                return datetime(parsed_dt.year, parsed_dt.month, parsed_dt.day, parsed_dt.hour, parsed_dt.minute, parsed_dt.second, tzinfo=KST).strftime("%Y-%m-%d %H:%M:%S")
+                ts = pd.Timestamp(parsed_dt)
+                # 후보 C: 문자열 timezone을 존중해 KST 변환
+                if getattr(ts, "tzinfo", None) is None:
+                    candidates.append(ts.tz_localize(KST))
+                else:
+                    candidates.append(ts.tz_convert(KST))
+                # 후보 D: 문자열의 clock-time만 KST로 해석
+                candidates.append(pd.Timestamp(datetime(ts.year, ts.month, ts.day, ts.hour, ts.minute, ts.second, tzinfo=KST)))
         except Exception:
             pass
 
-    return now_kst().strftime("%Y-%m-%d %H:%M:%S")
-
+    chosen = _choose_plausible_news_time(candidates, reference=collected_at)
+    if chosen is None or pd.isna(chosen):
+        chosen = pd.Timestamp(now_kst())
+    return chosen.strftime("%Y-%m-%d %H:%M:%S")
 
 def source_from_entry(entry: Dict[str, Any], source_hint: str = "") -> str:
     source = entry.get("source")
@@ -127,6 +211,9 @@ def fetch_feed(url: str, timeout_sec: int = 12) -> feedparser.FeedParserDict:
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
         "Accept": "application/rss+xml, application/xml, text/xml, */*",
+        "Cache-Control": "no-cache, no-store, max-age=0",
+        "Pragma": "no-cache",
+        "Expires": "0",
     }
     response = requests.get(url, headers=headers, timeout=timeout_sec)
     response.raise_for_status()
@@ -172,7 +259,7 @@ def collect_google_news(config_path: str | Path, start_date=None, end_date=None,
             if not title:
                 continue
             source = source_from_entry(entry, source_hint=source_hint)
-            published_at = parse_datetime(entry)
+            published_at = parse_datetime(entry, collected_at=collected_at)
             summary = strip_html(entry.get("summary", ""))
             link = str(entry.get("link", "")).strip()
             if is_excluded_notice_article(title=title, summary=summary, source=source, rss_query=query, link=link):
